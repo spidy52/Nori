@@ -1,0 +1,83 @@
+:root {
+  /* Core Surface Architecture */
+  --bg-primary: #07090e;
+  --bg-secondary: #0d111a;
+  --surface-base: #131926;
+  --surface-elevated: #1a2234;
+  --surface-floating: #232d42;
+  --surface-active: #2d3a54;
+  
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-medium: rgba(255, 255, 255, 0.12);
+  --border-active: rgba(255, 255, 255, 0.22);
+
+  /* Typography Colors */
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-inverse: #020617;
+
+  /* Contextual Semantic Color Accents */
+  --accent-primary: #6366f1;
+  --accent-digital: #818cf8;
+  --accent-digital-bg: rgba(99, 102, 241, 0.12);
+  
+  --accent-physical: #fb923c;
+  --accent-physical-bg: rgba(249, 115, 22, 0.12);
+  
+  --accent-device: #22d3ee;
+  --accent-device-bg: rgba(6, 182, 212, 0.12);
+  
+  --accent-timeline: #c084fc;
+  --accent-timeline-bg: rgba(168, 85, 247, 0.12);
+  
+  --accent-privacy: #34d399;
+  --accent-privacy-bg: rgba(16, 185, 129, 0.12);
+
+  --accent-collab: #38bdf8;
+  --accent-collab-bg: rgba(56, 189, 248, 0.12);
+
+  --danger: #f87171;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  
+  --warning: #fbbf24;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+
+  /* Crisp Square Curved Radius System */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+  --radius-full: 8px;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-glow-primary: 0 0 16px rgba(99, 102, 241, 0.2);
+  --shadow-glow-npu: 0 0 16px rgba(6, 182, 212, 0.2);
+}
+
+.light {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #f1f5f9;
+  --surface-base: #ffffff;
+  --surface-elevated: #f8fafc;
+  --surface-floating: #ffffff;
+  --surface-active: #e2e8f0;
+
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-medium: rgba(0, 0, 0, 0.12);
+  --border-active: rgba(0, 0, 0, 0.22);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-inverse: #f8fafc;
+
+  --accent-digital-bg: rgba(99, 102, 241, 0.08);
+  --accent-physical-bg: rgba(249, 115, 22, 0.08);
+  --accent-device-bg: rgba(6, 182, 212, 0.08);
+  --accent-timeline-bg: rgba(168, 85, 247, 0.08);
+  --accent-privacy-bg: rgba(16, 185, 129, 0.08);
+}

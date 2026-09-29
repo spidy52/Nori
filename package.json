@@ -1,0 +1,28 @@
+{
+  "name": "nori",
+  "version": "1.0.0",
+  "description": "Nori AI Work Companion - Studio Canvas, Context Graph & Floating Companion",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -n \"BACKEND,FRONTEND,ELECTRON\" -c \"blue,green,magenta\" \"npm run backend\" \"npm run frontend\" \"npm run pet\"",
+    "start": "concurrently -n \"BACKEND,FRONTEND,ELECTRON\" -c \"blue,green,magenta\" \"npm run backend\" \"npm run frontend\" \"npm run pet\"",
+    "pet": "npm --prefix electron start",
+    "electron": "npm --prefix electron start",
+    "backend": "python backend/free_port.py 8000 && python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload",
+    "frontend": "npm --prefix frontend run dev",
+    "voice": "python backend/voice_daemon.py",
+    "build": "npm --prefix frontend run build"
+  },
+  "keywords": [
+    "nori",
+    "ai-companion",
+    "floating-pet",
+    "canvas",
+    "voice-assistant"
+  ],
+  "author": "Ambica",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

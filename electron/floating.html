@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nori Floating Companion</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 8px;
+    }
+
+    .drag-region {
+      -webkit-app-region: drag;
+    }
+    .no-drag {
+      -webkit-app-region: no-drag;
+    }
+
+    /* Floating Chat & Action HUD Card */
+    #hudBox {
+      display: none;
+      width: 320px;
+      background: rgba(11, 14, 23, 0.96);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(250, 84, 56, 0.35);
+      border-radius: 14px;
+      padding: 12px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85);
+      margin-bottom: 8px;
+      animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #hudBox.open {
+      display: block;
+    }
+
+    .hud-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .hud-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #fa5438;
+      letter-spacing: 0.3px;
+    }
+    .hud-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #fa5438;
+      box-shadow: 0 0 8px #fa5438;
+      animation: pulse 2s infinite;
+    }
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px;
+      transition: color 0.15s;
+    }
+    .close-btn:hover {
+      color: #ffffff;
+    }
+
+    /* Message Response Area */
+    .response-area {
+      max-height: 170px;
+      overflow-y: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #e2e8f0;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .response-area::-webkit-scrollbar {
+      width: 4px;
+    }
+    .response-area::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+    }
+
+    /* Input Bar */
+    .input-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(18, 22, 36, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 4px 6px 4px 10px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .input-bar:focus-within {
+      border-color: #fa5438;
+      box-shadow: 0 0 10px rgba(250, 84, 56, 0.25);
+    }
+    .input-bar input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: #ffffff;
+      font-size: 12px;
+      outline: none;
+    }
+    .input-bar input::placeholder {
+      color: #64748b;
+    }
+    .send-btn {
+      background: #fa5438;
+      border: none;
+      border-radius: 6px;
+      color: white;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .send-btn:hover {
+      background: #ff6b52;
+      transform: scale(1.03);
+    }
+
+    .open-full-btn {
+      margin-top: 6px;
+      font-size: 10px;
+      color: #94a3b8;
+      cursor: pointer;
+      text-align: right;
+      transition: color 0.15s;
+    }
+    .open-full-btn:hover {
+      color: #fa5438;
+    }
+
+    /* Glowing Orb Container */
+    #orbContainer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    #orbCanvas {
+      width: 100px;
+      height: 100px;
+      cursor: grab;
+      filter: drop-shadow(0 0 14px rgba(250, 84, 56, 0.4));
+      transition: filter 0.3s ease, transform 0.2s ease;
+    }
+    #orbCanvas:active {
+      cursor: grabbing;
+      transform: scale(0.96);
+    }
+    #orbCanvas:hover {
+      filter: drop-shadow(0 0 22px rgba(250, 84, 56, 0.7));
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: scale(0.92) translateY(8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.2); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Floating Chat & Action HUD Card -->
+  <div id="hudBox" class="no-drag">
+    <div class="hud-header">
+      <div class="hud-status">
+        <span class="hud-dot" id="hudDot"></span>
+        <span id="hudStatusText">Nori AI Assistant</span>
+      </div>
+      <button class="close-btn" onclick="collapseToOrb()">✕</button>
+    </div>
+
+    <div class="response-area" id="responseArea">
+      Hi! Type a question, ask me to draw architecture on canvas, or command your desktop.
+    </div>
+
+    <form class="input-bar" onsubmit="handleSend(event)">
+      <input
+        type="text"
+        id="userInput"
+        placeholder="Ask Nori or command desktop..."
+        autocomplete="off"
+      />
+      <button type="submit" class="send-btn" id="sendBtn">Send</button>
+    </form>
+
+    <div class="open-full-btn" onclick="openFullApp()">
+      ⚡ Open Full Workspace (Port 5173) ↗
+    </div>
+  </div>
+
+  <!-- Pure Bioluminescent Floating Orb -->
+  <div id="orbContainer" class="drag-region">
+    <canvas id="orbCanvas" width="200" height="200" class="no-drag"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("orbCanvas");
+    const ctx = canvas.getContext("2d");
+    const size = 100;
+    const dpr = 2;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    ctx.scale(dpr, dpr);
+
+    const radius = size * 0.38;
+    const totalParticles = 1100;
+    const particles = [];
+    const colorPalette = [
+      '#22d3ee', '#38bdf8', '#6366f1', '#818cf8',
+      '#a855f7', '#c084fc', '#ec4899', '#f43f5e',
+      '#fb923c', '#f97316'
+    ];
+
+    for (let i = 0; i < totalParticles; i++) {
+      const phi = Math.acos(1 - (2 * (i + 0.5)) / totalParticles);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      const x = Math.sin(phi) * Math.cos(theta);
+      const y = Math.cos(phi);
+      const z = Math.sin(phi) * Math.sin(theta);
+
+      let colorIdx = Math.floor(((y + 1) / 2) * (colorPalette.length - 1));
+      colorIdx = Math.max(0, Math.min(colorPalette.length - 1, colorIdx));
+
+      particles.push({
+        baseX: x * radius,
+        baseY: y * radius,
+        baseZ: z * radius,
+        color: colorPalette[colorIdx],
+        size: Math.random() * 1.5 + 0.8
+      });
+    }
+
+    let currentCompanion = 'orb';
+    let state = 'idle';
+    let isSleeping = false;
+    let isPaused = false;
+    let isHudOpen = false;
+    let time = 0;
+    let rotX = 0.2;
+    let rotY = 0;
+    let lastActivity = Date.now();
+    let hudCollapseTimer = null;
+
+    function resetActivity() {
+      lastActivity = Date.now();
+      if (isSleeping) isSleeping = false;
+    }
+
+    // Expanding / Collapsing Window Bounds
+    function expandToHud() {
+      isHudOpen = true;
+      document.getElementById("hudBox").classList.add("open");
+      if (window.electronAPI && window.electronAPI.resizeFloating) {
+        window.electronAPI.resizeFloating(360, 420);
+      }
+      setTimeout(() => {
+        document.getElementById("userInput").focus();
+      }, 50);
+
+      if (hudCollapseTimer) clearTimeout(hudCollapseTimer);
+      hudCollapseTimer = setTimeout(() => {
+        if (isHudOpen && !document.getElementById("userInput").value.trim()) {
+          collapseToOrb();
+        }
+      }, 30000);
+    }
+
+    function collapseToOrb() {
+      isHudOpen = false;
+      document.getElementById("hudBox").classList.remove("open");
+      if (window.electronAPI && window.electronAPI.resizeFloating) {
+        window.electronAPI.resizeFloating(140, 140);
+      }
+      if (hudCollapseTimer) clearTimeout(hudCollapseTimer);
+    }
+
+    function openFullApp() {
+      if (window.electronAPI && window.electronAPI.openMainWindow) {
+        window.electronAPI.openMainWindow();
+      }
+      collapseToOrb();
+    }
+
+    // Particle Render Loop
+    function render() {
+      const now = Date.now();
+      if (!isSleeping && !isPaused && !isHudOpen && (now - lastActivity > 15000)) {
+        isSleeping = true;
+      }
+
+      const activeSleeping = isSleeping || state === 'sleeping';
+      const timeStep = isPaused ? 0.005 : activeSleeping ? 0.012 : state === 'thinking' ? 0.038 : 0.022;
+      time += timeStep;
+
+      ctx.clearRect(0, 0, size, size);
+      const centerX = size / 2;
+      const centerY = size / 2;
+
+      let speedMult = 1.0;
+      let waveAmpRatio = 0.06;
+      let glowColor = 'rgba(99, 102, 241, 0.22)';
+
+      if (isPaused) {
+        speedMult = 0.2;
+        waveAmpRatio = 0.015;
+        glowColor = 'rgba(244, 63, 94, 0.15)';
+      } else if (activeSleeping) {
+        speedMult = 0.6;
+        waveAmpRatio = 0.035 + Math.sin(time * 0.8) * 0.015;
+        glowColor = 'rgba(250, 84, 56, 0.20)';
+      } else if (state === 'listening') {
+        speedMult = 1.8;
+        waveAmpRatio = 0.11;
+        glowColor = 'rgba(34, 211, 238, 0.55)';
+      } else if (state === 'thinking') {
+        speedMult = 2.4;
+        waveAmpRatio = 0.10;
+        glowColor = 'rgba(192, 132, 252, 0.50)';
+      } else if (state === 'speaking') {
+        speedMult = 1.4 + Math.sin(time * 4) * 0.3;
+        waveAmpRatio = 0.08 + Math.sin(time * 4) * 0.04;
+        glowColor = 'rgba(250, 84, 56, 0.45)';
+      }
+
+      rotY += 0.005 * speedMult;
+      rotX += 0.002 * speedMult;
+
+      const radialGlow = ctx.createRadialGradient(
+        centerX, centerY, radius * 0.2,
+        centerX, centerY, radius * 1.4
+      );
+      radialGlow.addColorStop(0, glowColor);
+      radialGlow.addColorStop(0.7, 'rgba(0,0,0,0)');
+      ctx.fillStyle = radialGlow;
+      ctx.fillRect(0, 0, size, size);
+
+      function project3D(x, y, z, cx, cy, rx, ry, fov = 350) {
+        const cosY = Math.cos(ry);
+        const sinY = Math.sin(ry);
+        const x1 = x * cosY + z * sinY;
+        const y1 = y;
+        const z1 = -x * sinY + z * cosY;
+
+        const cosX = Math.cos(rx);
+        const sinX = Math.sin(rx);
+        const x2 = x1;
+        const y2 = y1 * cosX - z1 * sinX;
+        const z2 = y1 * sinX + z1 * cosX;
+
+        const sc = fov / (fov + z2);
+        return {
+          x: cx + x2 * sc,
+          y: cy + y2 * sc,
+          z: z2,
+          scale: sc,
+          alpha: Math.max(0.2, Math.min(1.0, (z2 + 60) / 120))
+        };
+      }
+
+      if (currentCompanion === 'nova') {
+        // --- 3D CYBER PRISM (Quantum Gem) ---
+        const R = 30 * (1 + (state === 'speaking' ? Math.sin(time * 4) * 0.1 : 0));
+        const verts = [
+          [0, -R, 0], [0, R, 0],
+          [R, 0, 0], [-R, 0, 0],
+          [0, 0, R], [0, 0, -R]
+        ];
+        const edges = [
+          [0, 2], [0, 3], [0, 4], [0, 5],
+          [1, 2], [1, 3], [1, 4], [1, 5],
+          [2, 4], [4, 3], [3, 5], [5, 2]
+        ];
+
+        const prj = verts.map(v => project3D(v[0], v[1], v[2], centerX, centerY, rotX, rotY));
+
+        const corePrj = project3D(0, 0, 0, centerX, centerY, rotX, rotY);
+        const coreR = Math.max(4, 9 * corePrj.scale * (1 + Math.sin(time * 3) * 0.15));
+        const coreGrad = ctx.createRadialGradient(corePrj.x, corePrj.y, 0, corePrj.x, corePrj.y, coreR);
+        coreGrad.addColorStop(0, '#ffffff');
+        coreGrad.addColorStop(0.5, '#fbbf24');
+        coreGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath();
+        ctx.arc(corePrj.x, corePrj.y, coreR, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.6;
+        edges.forEach(([i, j]) => {
+          ctx.beginPath();
+          ctx.moveTo(prj[i].x, prj[i].y);
+          ctx.lineTo(prj[j].x, prj[j].y);
+          ctx.stroke();
+        });
+
+        prj.forEach(p => {
+          ctx.fillStyle = '#fef08a';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(1.5, 3 * p.scale), 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Orbital gimbal ring
+        ctx.strokeStyle = 'rgba(251, 146, 60, 0.7)';
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        const ringPts = 24;
+        for (let i = 0; i <= ringPts; i++) {
+          const theta = (i / ringPts) * Math.PI * 2;
+          const rx = Math.cos(theta) * 38;
+          const rz = Math.sin(theta) * 38;
+          const rp = project3D(rx, Math.sin(time * 2 + theta) * 5, rz, centerX, centerY, rotX * 0.5, -rotY * 0.8);
+          if (i === 0) ctx.moveTo(rp.x, rp.y);
+          else ctx.lineTo(rp.x, rp.y);
+        }
+        ctx.stroke();
+
+        // 4 Satellites
+        for (let i = 0; i < 4; i++) {
+          const satAngle = time * 1.5 + (i * Math.PI) / 2;
+          const sx = Math.cos(satAngle) * 42;
+          const sy = Math.sin(time * 2 + i) * 6;
+          const sz = Math.sin(satAngle) * 42;
+          const sp = project3D(sx, sy, sz, centerX, centerY, rotX, rotY);
+          ctx.fillStyle = '#fbbf24';
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, Math.max(1.2, 2.5 * sp.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+      } else if (currentCompanion === 'kuro') {
+        // --- 3D HYPER CUBE (Tesseract Matrix) ---
+        const r1 = 15;
+        const r2 = 28;
+        const innerVerts = [];
+        const outerVerts = [];
+        for (const x of [-1, 1]) {
+          for (const y of [-1, 1]) {
+            for (const z of [-1, 1]) {
+              innerVerts.push([x * r1, y * r1, z * r1]);
+              outerVerts.push([x * r2, y * r2, z * r2]);
+            }
+          }
+        }
+
+        const prjInner = innerVerts.map(v => project3D(v[0], v[1], v[2], centerX, centerY, rotX * 1.2, rotY * 1.4));
+        const prjOuter = outerVerts.map(v => project3D(v[0], v[1], v[2], centerX, centerY, -rotX * 0.8, -rotY * 0.9));
+
+        const cubeEdges = [
+          [0,1], [1,3], [3,2], [2,0],
+          [4,5], [5,7], [7,6], [6,4],
+          [0,4], [1,5], [2,6], [3,7]
+        ];
+
+        ctx.strokeStyle = 'rgba(168, 85, 247, 0.35)';
+        ctx.lineWidth = 1.0;
+        for (let i = 0; i < 8; i++) {
+          ctx.beginPath();
+          ctx.moveTo(prjInner[i].x, prjInner[i].y);
+          ctx.lineTo(prjOuter[i].x, prjOuter[i].y);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = '#f43f5e';
+        ctx.lineWidth = 1.4;
+        cubeEdges.forEach(([i, j]) => {
+          ctx.beginPath();
+          ctx.moveTo(prjInner[i].x, prjInner[i].y);
+          ctx.lineTo(prjInner[j].x, prjInner[j].y);
+          ctx.stroke();
+        });
+
+        ctx.strokeStyle = '#c084fc';
+        ctx.lineWidth = 1.6;
+        cubeEdges.forEach(([i, j]) => {
+          ctx.beginPath();
+          ctx.moveTo(prjOuter[i].x, prjOuter[i].y);
+          ctx.lineTo(prjOuter[j].x, prjOuter[j].y);
+          ctx.stroke();
+        });
+
+        prjOuter.forEach(p => {
+          ctx.fillStyle = '#f43f5e';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(1.8, 3.2 * p.scale), 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+      } else if (currentCompanion === 'lumi') {
+        // --- 3D PLASMA WISP (Cosmic Vortex) ---
+        const corePrj = project3D(0, 0, 0, centerX, centerY, rotX, rotY);
+        const starR = Math.max(5, 12 * corePrj.scale * (1 + Math.sin(time * 3) * 0.12));
+        const starGrad = ctx.createRadialGradient(corePrj.x, corePrj.y, 0, corePrj.x, corePrj.y, starR);
+        starGrad.addColorStop(0, '#ffffff');
+        starGrad.addColorStop(0.4, '#00f0ff');
+        starGrad.addColorStop(1, 'rgba(6, 182, 212, 0)');
+        ctx.fillStyle = starGrad;
+        ctx.beginPath();
+        ctx.arc(corePrj.x, corePrj.y, starR, 0, Math.PI * 2);
+        ctx.fill();
+
+        const pCount = 200;
+        for (let i = 0; i < pCount; i++) {
+          const arm = i % 2;
+          const r = 4 + (i / pCount) * 32;
+          const theta = arm * Math.PI + r * 0.35 + time * (1.6 / Math.sqrt(Math.max(1, r)));
+          const px = Math.cos(theta) * r;
+          const py = Math.sin(time * 2 + r * 0.6) * 3;
+          const pz = Math.sin(theta) * r;
+          const p = project3D(px, py, pz, centerX, centerY, rotX, rotY);
+
+          ctx.fillStyle = arm === 0 ? '#38bdf8' : '#d946ef';
+          ctx.globalAlpha = p.alpha * 0.85;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(0.7, 1.8 * p.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+
+        for (let i = 0; i < 3; i++) {
+          const t = time * 1.8 + i * 2.1;
+          const sx = Math.sin(t) * 36;
+          const sy = Math.cos(t * 1.3) * 12;
+          const sz = Math.cos(t * 0.8) * 36;
+          const sp = project3D(sx, sy, sz, centerX, centerY, rotX, rotY);
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, Math.max(1.5, 3 * sp.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+      } else if (currentCompanion === 'rover') {
+        // --- 3D NEXUS BOT (Aero AI Drone) ---
+        const bob = Math.sin(time * 2) * 3;
+        const headPrj = project3D(0, bob, 0, centerX, centerY, rotX, rotY);
+        const headR = Math.max(12, 24 * headPrj.scale);
+
+        const headGrad = ctx.createRadialGradient(
+          headPrj.x - headR * 0.3, headPrj.y - headR * 0.3, headR * 0.1,
+          headPrj.x, headPrj.y, headR
+        );
+        headGrad.addColorStop(0, '#334155');
+        headGrad.addColorStop(0.7, '#1e293b');
+        headGrad.addColorStop(1, '#0f172a');
+        ctx.fillStyle = headGrad;
+        ctx.beginPath();
+        ctx.arc(headPrj.x, headPrj.y, headR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // Visor
+        const visorPrj = project3D(0, bob + 2, 22, centerX, centerY, rotX, rotY);
+        const visorW = Math.max(6, 16 * visorPrj.scale);
+        const visorH = Math.max(3, 9 * visorPrj.scale);
+        ctx.fillStyle = '#020617';
+        ctx.beginPath();
+        ctx.ellipse(visorPrj.x, visorPrj.y, visorW, visorH, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+        ctx.lineWidth = 1.0;
+        ctx.stroke();
+
+        // Cyan LED Eye
+        const isBlink = Math.sin(time * 2.5) > 0.95;
+        const eyeH = isBlink ? 1.0 : Math.max(2, 5 * visorPrj.scale);
+        ctx.fillStyle = '#00f0ff';
+        ctx.beginPath();
+        ctx.ellipse(visorPrj.x, visorPrj.y, Math.max(2, 5 * visorPrj.scale), eyeH, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (!isBlink) {
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(visorPrj.x, visorPrj.y, Math.max(0.8, 1.8 * visorPrj.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Thruster Pods
+        [-38, 38].forEach((tx, idx) => {
+          const podBob = bob + Math.sin(time * 2.2 + (idx === 0 ? 0.3 : -0.3)) * 2;
+          const podPrj = project3D(tx, podBob, 0, centerX, centerY, rotX, rotY);
+          const podR = Math.max(4, 7 * podPrj.scale);
+
+          ctx.fillStyle = '#1e293b';
+          ctx.beginPath();
+          ctx.arc(podPrj.x, podPrj.y, podR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 1.0;
+          ctx.stroke();
+
+          const jetPrj = project3D(tx, podBob + 8, 0, centerX, centerY, rotX, rotY);
+          ctx.fillStyle = '#00f0ff';
+          ctx.beginPath();
+          ctx.arc(jetPrj.x, jetPrj.y, Math.max(2, 3.5 * jetPrj.scale), 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Top Halo
+        const haloPrj = project3D(0, bob - 24, 0, centerX, centerY, rotX, rotY);
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.ellipse(haloPrj.x, haloPrj.y, Math.max(6, 15 * haloPrj.scale), Math.max(2, 4 * haloPrj.scale), 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+      } else if (currentCompanion === 'sprout') {
+        // --- 3D BIO LOTUS (Sacred Harmony Bloom) ---
+        const seedPrj = project3D(0, 0, 0, centerX, centerY, rotX, rotY);
+        const seedR = Math.max(4, 10 * seedPrj.scale * (1 + Math.sin(time * 2.5) * 0.1));
+
+        const seedGrad = ctx.createRadialGradient(seedPrj.x, seedPrj.y, 0, seedPrj.x, seedPrj.y, seedR);
+        seedGrad.addColorStop(0, '#ffffff');
+        seedGrad.addColorStop(0.5, '#10b981');
+        seedGrad.addColorStop(1, 'rgba(16, 185, 129, 0)');
+        ctx.fillStyle = seedGrad;
+        ctx.beginPath();
+        ctx.arc(seedPrj.x, seedPrj.y, seedR, 0, Math.PI * 2);
+        ctx.fill();
+
+        const bloom = 0.8 + Math.sin(time * 1.8) * 0.2;
+        const petalLayers = [
+          { count: 6, len: 24 * bloom, color: 'rgba(16, 185, 129, 0.75)' },
+          { count: 6, len: 34 * bloom, color: 'rgba(52, 211, 153, 0.55)' }
+        ];
+
+        petalLayers.forEach((layer, lIdx) => {
+          ctx.fillStyle = layer.color;
+          ctx.strokeStyle = '#34d399';
+          ctx.lineWidth = 1.2;
+
+          for (let i = 0; i < layer.count; i++) {
+            const angle = (i * Math.PI * 2) / layer.count + (lIdx * Math.PI) / 6 + time * 0.3;
+            const px = Math.cos(angle) * layer.len;
+            const pz = Math.sin(angle) * layer.len;
+            const py = -Math.sin(bloom * Math.PI) * 8 * (lIdx === 0 ? 1 : 1.5);
+            const tip = project3D(px, py, pz, centerX, centerY, rotX, rotY);
+
+            ctx.beginPath();
+            ctx.moveTo(seedPrj.x, seedPrj.y);
+            ctx.lineTo(tip.x, tip.y);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(tip.x, tip.y, Math.max(1.2, 2.8 * tip.scale), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
+
+        for (let i = 0; i < 24; i++) {
+          const sporeAngle = (i * 137.5 * Math.PI) / 180;
+          const sr = 12 + (i % 5) * 5;
+          const sx = Math.cos(sporeAngle) * sr;
+          const sy = -((time * 20 + i * 15) % 80) + 30;
+          const sz = Math.sin(sporeAngle) * sr;
+          const sp = project3D(sx, sy, sz, centerX, centerY, rotX, rotY);
+
+          ctx.fillStyle = '#a7f3d0';
+          ctx.globalAlpha = Math.max(0, 1 - Math.abs(sy) / 45);
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, Math.max(0.6, 1.6 * sp.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+
+      } else {
+        // --- 3D PARTICLE VOICE GLOBE (orb - Default) ---
+        const projected = [];
+        const waveAmp = radius * waveAmpRatio;
+
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          const nx = p.baseX / radius;
+          const ny = p.baseY / radius;
+          const nz = p.baseZ / radius;
+
+          const wave =
+            Math.sin(time * 1.5 + nx * 1.8 + ny * 1.8) *
+            Math.cos(time * 1.2 + nz * 1.8) *
+            waveAmp;
+
+          const curR = radius + wave;
+          const px = nx * curR;
+          const py = ny * curR;
+          const pz = nz * curR;
+
+          const pt = project3D(px, py, pz, centerX, centerY, rotX, rotY, 400);
+
+          projected.push({
+            x: pt.x,
+            y: pt.y,
+            z: pt.z,
+            size: Math.max(0.6, p.size * pt.scale),
+            alpha: pt.alpha,
+            color: p.color
+          });
+        }
+
+        projected.sort((a, b) => a.z - b.z);
+
+        for (let i = 0; i < projected.length; i++) {
+          const p = projected[i];
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = p.alpha;
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1.0;
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    render();
+
+    // Mouse Dragging & Click to Expand
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let hasMoved = false;
+
+    canvas.addEventListener("mousedown", (e) => {
+      if (e.button === 0) {
+        isDragging = true;
+        dragStartX = e.screenX;
+        dragStartY = e.screenY;
+        hasMoved = false;
+        resetActivity();
+      }
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isDragging) return;
+      const dx = e.screenX - dragStartX;
+      const dy = e.screenY - dragStartY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        hasMoved = true;
+        if (window.electronAPI && window.electronAPI.moveFloating) {
+          window.electronAPI.moveFloating(dx, dy);
+        }
+        dragStartX = e.screenX;
+        dragStartY = e.screenY;
+      }
+    });
+
+    window.addEventListener("mouseup", (e) => {
+      if (isDragging) {
+        isDragging = false;
+        if (!hasMoved) {
+          // Clicked Orb: Toggle in-place input HUD
+          resetActivity();
+          if (isHudOpen) {
+            collapseToOrb();
+          } else {
+            expandToHud();
+          }
+        }
+      }
+    });
+
+    // Right-click: Pause / Resume Toggle
+    canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      isPaused = !isPaused;
+      state = isPaused ? 'paused' : 'idle';
+      resetActivity();
+    });
+
+    // Send Message / Task Execution
+    async function handleSend(e) {
+      if (e) e.preventDefault();
+      const input = document.getElementById("userInput");
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = "";
+      resetActivity();
+      state = "thinking";
+      document.getElementById("hudStatusText").innerText = "Thinking & Executing...";
+      document.getElementById("responseArea").innerHTML = `<span style="color:#fa5438;">⚡ You:</span> ${text}<br/><br/><em>Thinking...</em>`;
+
+      try {
+        const resp = await fetch("http://127.0.0.1:8000/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: text })
+        });
+
+        const data = await resp.json();
+        const reply = data.response || data.message || "Command executed.";
+        
+        state = "speaking";
+        document.getElementById("hudStatusText").innerText = "Nori Companion Active";
+        document.getElementById("responseArea").innerHTML = `<span style="color:#fa5438;">⚡ You:</span> ${text}<br/><br/><span style="color:#38bdf8;">✦ Nori:</span> ${reply}`;
+
+        // Reset state after action completes
+        setTimeout(() => {
+          state = "idle";
+          document.getElementById("hudStatusText").innerText = "Nori AI Assistant";
+        }, 4500);
+
+      } catch (err) {
+        state = "idle";
+        document.getElementById("hudStatusText").innerText = "Nori AI Assistant";
+        document.getElementById("responseArea").innerHTML = `<span style="color:#f43f5e;">Could not reach Nori backend. Is it running?</span>`;
+      }
+    }
+
+    async function checkActiveCompanion() {
+      try {
+        const resp = await fetch("http://127.0.0.1:8000/api/companion");
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.companion) {
+            currentCompanion = data.companion;
+          }
+        }
+      } catch (e) {}
+    }
+    checkActiveCompanion();
+    setInterval(checkActiveCompanion, 1000);
+
+    if (window.electronAPI && window.electronAPI.onCompanionChanged) {
+      window.electronAPI.onCompanionChanged((newStyle) => {
+        currentCompanion = newStyle;
+        resetActivity();
+      });
+    }
+
+    // Connect to WebSocket for real-time live events
+    function connectWS() {
+      try {
+        const ws = new WebSocket("ws://127.0.0.1:8000/ws/events");
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "COMPANION_CHANGED" && data.companion) {
+              currentCompanion = data.companion;
+              resetActivity();
+            } else if (data.type === "INITIAL_STATE" && data.companion) {
+              currentCompanion = data.companion;
+            } else if (data.type === "STATE_CHANGED" && data.data?.state) {
+              state = data.data.state;
+              resetActivity();
+            } else if (data.type === "VOICE_HEARD") {
+              state = "listening";
+              resetActivity();
+              if (isHudOpen && data.data?.text) {
+                document.getElementById("responseArea").innerText = `🎙️ "${data.data.text}"`;
+              }
+            }
+          } catch (e) {}
+        };
+        ws.onclose = () => setTimeout(connectWS, 3000);
+      } catch (e) {
+        setTimeout(connectWS, 3000);
+      }
+    }
+
+    connectWS();
+  </script>
+</body>
+</html>

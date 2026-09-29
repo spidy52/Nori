@@ -1,0 +1,12 @@
+{
+  "name": "nori-desktop-companion",
+  "version": "1.0.0",
+  "description": "Nori Always-On-Top Floating Desktop Companion & Voice Assistant",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.4.5"
+  }
+}
