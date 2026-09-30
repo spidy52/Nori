@@ -215,8 +215,8 @@ export const CameraGuidanceView: React.FC = () => {
           ctx.clearRect(0, 0, currentCanvas.width, currentCanvas.height);
 
           const { objs: rawObjs, frameW, frameH } = rawDetectionsRef.current;
-          // Stale detection guard: if no fresh data in 700ms, treat as empty scene
-          const isStale = (Date.now() - lastDetectionTimeRef.current) > 700;
+          // Stale detection guard: only clear if truly idle (no response in 2.5s)
+          const isStale = (Date.now() - lastDetectionTimeRef.current) > 2500;
           const objs = isStale ? [] : rawObjs;
           const vidW = video.videoWidth || frameW || 640;
           const vidH = video.videoHeight || frameH || 480;
@@ -344,12 +344,12 @@ export const CameraGuidanceView: React.FC = () => {
             }
           });
 
-          // Mark missing boxes to fade out INSTANTLY when camera shifts or object is removed
+          // Mark missing boxes to fade out when camera shifts or object leaves frame
           tracked.forEach((box, key) => {
             if (!seenIds.has(key)) {
               box.missingFrames += 1;
               box.targetAlpha = 0.0;
-              box.alpha *= 0.15; // Extremely snappy decay — gone in ~2-3 animation frames
+              // Let the lerp handle fade — no hard multiply so boxes don't vanish in 1 frame
             }
 
             // Snappy Real-Time Lerp Speed
@@ -362,8 +362,10 @@ export const CameraGuidanceView: React.FC = () => {
             box.currH += (box.targetH - box.currH) * lerpSpeed;
             box.alpha += (box.targetAlpha - box.alpha) * 0.60;
 
-            // Remove box immediately if gone after 1 missed detection cycle
-            if (box.alpha < 0.04 || box.missingFrames >= 1) {
+            // Remove box after 4 missed animation frames (~67ms grace window).
+            // This is enough to survive the 300-500ms detection gap without flickering,
+            // while still clearing genuine ghost boxes quickly.
+            if (box.alpha < 0.04 || box.missingFrames > 4) {
               tracked.delete(key);
               return;
             }

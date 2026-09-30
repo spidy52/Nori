@@ -473,48 +473,32 @@ class PhysicalVisionEngine:
             c_name = d["label"].lower()
 
             # --- SURROGATE SUPPRESSION / FALLBACK ---
-            # Vehicle surrogates (truck/car/bus) fired on electronics → fallback label
-            # Furniture surrogates (dining table/book) fired on boards → fallback label
-            # Only suppress silently if CLIP already provided a replacement object.
+            # If CLIP already fired and identified the real object, drop this surrogate.
+            # If CLIP did not fire (not installed / low confidence), show a neutral
+            # "Unidentified Object" box using YOLO's bbox — no category assumptions.
             clip_fired = any(o.details.get('model', '').startswith('CLIP') for o in objects)
             bx, by, bw, bh = d["bbox"]
 
             if c_name in _yolo_surrogate_labels:
-                if clip_fired:
-                    # CLIP already identified the real object — drop the surrogate entirely
-                    continue
-                # CLIP not available / didn't fire — use fallback label so object isn't invisible
-                _vehicle_surrogates = {'truck', 'car', 'bus', 'motorcycle', 'bicycle', 'airplane', 'boat', 'train'}
-                _furniture_surrogates = {'dining table', 'book', 'remote', 'skateboard', 'tie'}
-                # Skip full-frame false positives regardless
+                # Always skip full-frame false positives
                 if bw >= w * 0.88 and bh >= h * 0.88:
                     continue
-                if c_name in _vehicle_surrogates:
-                    fallback_label = "Electronic Component / Circuit Board"
-                    fallback_cat = "microcontroller"
-                    fallback_dialogue = "Detected an electronic component or circuit board. Bring closer for detailed identification."
-                    fallback_interactions = ["Pinout Guide", "Build Project", "Draw Schematic", "Generate Code"]
-                elif c_name in _furniture_surrogates:
-                    fallback_label = "Electronic Board / Module"
-                    fallback_cat = "microcontroller"
-                    fallback_dialogue = "Detected a flat electronic board or module."
-                    fallback_interactions = ["Inspect Component", "Build Project", "Generate Code"]
-                else:
-                    fallback_label = "Unknown Component"
-                    fallback_cat = "object"
-                    fallback_dialogue = "Detected an unidentified component."
-                    fallback_interactions = ["Inspect Object", "Workspace Focus"]
-
+                if clip_fired:
+                    # CLIP already identified the real object — drop surrogate silently
+                    continue
+                # CLIP unavailable — show neutral box so object isn't invisible.
+                # No category guess, no hardcoded name. User can bring closer to identify.
                 objects.append(DetectedObject(
-                    label=fallback_label,
-                    confidence=round(d["confidence"] * 0.75, 2),  # Reduce confidence to signal uncertainty
-                    category=fallback_cat,
+                    label="Unidentified Object",
+                    confidence=round(d["confidence"] * 0.65, 2),
+                    category="object",
                     bbox=[bx, by, bw, bh],
-                    details={"model": "YOLOv8-Fallback", "raw_coco": c_name},
-                    interactive_dialogue=fallback_dialogue,
-                    suggested_interactions=fallback_interactions
+                    details={"model": "YOLOv8-Surrogate", "raw_coco": c_name},
+                    interactive_dialogue="Unidentified object detected. Bring it closer or hold still for better identification.",
+                    suggested_interactions=["Identify Object", "Inspect Closer", "Workspace Focus"]
                 ))
                 continue
+
 
 
 
