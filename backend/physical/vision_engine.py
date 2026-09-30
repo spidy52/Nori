@@ -81,14 +81,44 @@ class PhysicalVisionEngine:
                 'yolov8n.pt'
             ]
             chosen_path = next((p for p in possible_paths if os.path.exists(p)), None)
-            if chosen_path and (self.qnn_yolo is None or not self.qnn_yolo.is_loaded):
+            if chosen_path:
                 self.yolo_model = YOLO(chosen_path)
             else:
                 self.yolo_model = None
         except Exception:
             self.yolo_model = None
 
-        # 2. Load OpenCV YuNet Deep Learning Face Detector
+        # 3. Secondary High-Recall Model for faint / motion-blurred objects (e.g. spinning fans)
+        try:
+            s_path = os.path.join(os.getcwd(), 'yolov8s.pt')
+            self.yolo_s = YOLO(s_path) if os.path.exists(s_path) else None
+        except Exception:
+            self.yolo_s = None
+
+        # 4. Open-World Zero-Shot CLIP Refiner for physical objects & room appliances (fans, coolers, etc.)
+        self.clip_model = None
+        self.clip_preprocess = None
+        self.clip_text_emb = None
+        self.open_candidates = [
+            'ceiling fan', 'table fan', 'air cooler', 'air conditioner', 'refrigerator',
+            'microwave', 'oven', 'washing machine', 'kitchen sink', 'toilet',
+            'laptop computer', 'computer monitor', 'television', 'coffee mug', 'water bottle',
+            'desk', 'chair', 'couch', 'bed', 'book', 'clock', 'circuit board'
+        ]
+        try:
+            import clip
+            import torch
+            clip_path = os.path.join(os.getcwd(), 'weights', 'clip', 'ViT-B-32.pt')
+            if os.path.exists(clip_path):
+                self.clip_model, self.clip_preprocess = clip.load(clip_path, device='cpu')
+                tokens = clip.tokenize([f'a photo of a {c}' for c in self.open_candidates])
+                with torch.no_grad():
+                    self.clip_text_emb = self.clip_model.encode_text(tokens)
+                    self.clip_text_emb /= self.clip_text_emb.norm(dim=-1, keepdim=True)
+        except Exception:
+            self.clip_model = None
+
+        # 5. Load OpenCV YuNet Deep Learning Face Detector
         model_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
         yunet_path = os.path.join(model_dir, 'face_detection_yunet.onnx')
         self.face_detector = None
@@ -104,7 +134,7 @@ class PhysicalVisionEngine:
             except Exception:
                 self.face_detector = None
 
-        # Zero suppressed classes: All objects (cooking, dining, tools, furniture, room items) are dynamically allowed
+        # Zero suppressed classes: All objects are dynamically allowed
         self.suppressed_classes = set()
 
     def decode_image(self, image_data: Union[bytes, str]) -> Optional[np.ndarray]:
@@ -312,17 +342,18 @@ class PhysicalVisionEngine:
         has_human_presence = bool(face_boxes)
 
         # -----------------------------------------------------------------
-        # 2. QUALCOMM HEXAGON NPU / HOST CPU STATIC YOLOV8 DETECTION
+        # 2. NEURAL VISION WITH OPEN-WORLD ZERO-SHOT REFINEMENT
         # -----------------------------------------------------------------
         raw_dets = []
         if self.qnn_yolo is not None and self.qnn_yolo.is_loaded:
             try:
-                raw_dets, _ = self.qnn_yolo.detect(img, conf_thresh=0.42, iou_thresh=0.45)
+                raw_dets, _ = self.qnn_yolo.detect(img, conf_thresh=0.20, iou_thresh=0.45)
             except Exception:
                 raw_dets = []
-        elif self.yolo_model is not None:
+
+        if len(raw_dets) == 0 and self.yolo_model is not None:
             try:
-                yolo_results = self.yolo_model(img, conf=0.42, verbose=False)
+                yolo_results = self.yolo_model(img, conf=0.18, verbose=False)
                 if yolo_results and len(yolo_results) > 0:
                     r = yolo_results[0]
                     for box in r.boxes:
@@ -345,11 +376,35 @@ class PhysicalVisionEngine:
             except Exception:
                 raw_dets = []
 
+        # High-recall fallback for faint or motion-blurred items (e.g. spinning ceiling fan)
+        if len(raw_dets) == 0 and self.yolo_s is not None:
+            try:
+                yolo_results = self.yolo_s(img, conf=0.18, verbose=False)
+                if yolo_results and len(yolo_results) > 0:
+                    r = yolo_results[0]
+                    for box in r.boxes:
+                        cid = int(box.cls[0].item())
+                        c_name = r.names.get(cid, "object")
+                        score = float(box.conf[0].item())
+                        xyxy = box.xyxy[0].tolist()
+                        bx = int(max(0, xyxy[0]))
+                        by = int(max(0, xyxy[1]))
+                        bw = int(max(1, xyxy[2] - xyxy[0]))
+                        bh = int(max(1, xyxy[3] - xyxy[1]))
+                        raw_dets.append({
+                            "class_id": cid,
+                            "label": c_name,
+                            "confidence": score,
+                            "bbox": [bx, by, bw, bh],
+                            "backend": "YOLOv8s_Fallback",
+                            "device": "Host CPU"
+                        })
+            except Exception:
+                pass
+
         # Process each detected bounding box dynamically
         for d in raw_dets:
             c_name = d["label"].lower()
-            if c_name in self.suppressed_classes:
-                continue
             if c_name == 'person':
                 has_human_presence = True
                 if face_boxes:
@@ -362,71 +417,54 @@ class PhysicalVisionEngine:
 
             crop = img[by:by+bh, bx:bx+bw]
 
-            # 2.1 Dynamic PCB & Microcontroller Verification on small workbench crops only
-            pcb_info = None
-            if bw < 320 and bh < 320 and c_name not in ['laptop', 'keyboard', 'potted plant', 'cup', 'bottle']:
-                pcb_info = electronics_engine.inspect_pcb_region(crop)
-
-            if pcb_info:
-                label = pcb_info["type"]
-                cat = "microcontroller"
-                score = pcb_info["confidence"]
-                dialogue = f"Detected {label}. Ready for circuit connections, project ideas, and firmware."
-                interactions = [
-                    "Build Project with Workspace Components",
-                    "Arduino Pinout Guide",
-                    "Draw Circuit Schematic on Canvas",
-                    "Generate Arduino Code"
-                ]
-                objects.append(DetectedObject(
-                    label=label,
-                    confidence=round(score, 2),
-                    category=cat,
-                    bbox=[bx, by, bw, bh],
-                    details=pcb_info,
-                    interactive_dialogue=dialogue,
-                    suggested_interactions=interactions
-                ))
-                continue
-
-            # 2.2 Refine ambiguous appliance / fixture classes
-            if c_name == 'toilet':
-                c_name = 'room fixture / appliance'
-            elif c_name in ['refrigerator', 'microwave', 'oven', 'toaster', 'sink']:
-                pass
-
-            # Preserve authentic neural model label dynamically (NO hardcoding)
+            # 2.1 Refine ambiguous COCO surrogate classes (sink, toilet, sports ball on fans/appliances) via CLIP
             label = c_name.title()
-            if c_name in ['laptop', 'keyboard', 'mouse', 'cell phone', 'tv', 'remote']:
-                cat = "electronics"
-                dialogue = f"Detected {label.lower()} in your workspace."
-                interactions = [f"Inspect {label}", "Focus Tracking", "Desktop Automation"]
-            elif c_name in ['refrigerator', 'microwave', 'oven', 'toaster', 'sink', 'room fixture / appliance']:
-                cat = "appliance"
-                dialogue = f"Observing {label.lower()} in your room."
-                interactions = ["Inspect Appliance", "Canvas Diagram", "Device Automation"]
-            elif c_name in [
-                'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza',
-                'donut', 'cake', 'bowl', 'cup', 'bottle', 'wine glass', 'fork', 'knife', 'spoon'
+            if self.clip_model is not None and self.clip_text_emb is not None and c_name in [
+                'sink', 'toilet', 'refrigerator', 'microwave', 'oven', 'sports ball', 'clock', 'vase'
             ]:
+                if crop.size > 0:
+                    try:
+                        import torch
+                        from PIL import Image
+                        pil_c = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                        tensor = self.clip_preprocess(pil_c).unsqueeze(0).to('cpu')
+                        with torch.no_grad():
+                            im_f = self.clip_model.encode_image(tensor)
+                            im_f /= im_f.norm(dim=-1, keepdim=True)
+                            sims = (im_f @ self.clip_text_emb.T).softmax(dim=-1).cpu().numpy()[0]
+                        best_idx = sims.argmax()
+                        label = self.open_candidates[best_idx].title()
+                    except Exception:
+                        pass
+
+            # 2.2 Dynamic category & dialogue resolution (Zero hardcoded object lists)
+            l_lower = label.lower()
+            if any(k in l_lower for k in ['fan', 'cooler', 'conditioner', 'refrigerator', 'microwave', 'oven', 'toaster', 'sink', 'appliance', 'washer']):
+                cat = "appliance"
+                dialogue = f"Observing {l_lower} in your room."
+                interactions = [f"Inspect {label}", "Device Guidance", "Canvas Diagram"]
+            elif any(k in l_lower for k in ['laptop', 'monitor', 'television', 'tv', 'phone', 'keyboard', 'mouse', 'remote']):
+                cat = "electronics"
+                dialogue = f"Detected {l_lower} in workspace."
+                interactions = [f"Inspect {label}", "Focus Tracking", "Desktop Automation"]
+            elif any(k in l_lower for k in [
+                'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'pizza', 'donut', 'cake',
+                'bowl', 'cup', 'bottle', 'mug', 'fork', 'knife', 'spoon', 'food', 'bread'
+            ]):
                 cat = "cooking_and_dining"
-                dialogue = f"Observing {label.lower()}. Ready for recipe ideas, cooking steps, and nutrition."
+                dialogue = f"Observing {l_lower}. Ready for recipe ideas, cooking steps, and nutrition."
                 interactions = ["Suggest Recipe", "Nutritional Breakdown", "Cooking Timer", "Meal Prep"]
-            elif c_name in ['chair', 'couch', 'bed', 'dining table']:
+            elif any(k in l_lower for k in ['chair', 'couch', 'bed', 'table', 'desk']):
                 cat = "furniture"
-                dialogue = f"Detected {label.lower()} in your workspace."
+                dialogue = f"Detected {l_lower} in your workspace."
                 interactions = ["Workspace Ergonomics", "Canvas Layout"]
-            elif c_name in ['sports ball', 'baseball bat', 'tennis racket', 'skateboard', 'surfboard']:
-                cat = "sports_and_fitness"
-                dialogue = f"Observing {label.lower()} for activity and fitness."
-                interactions = ["Workout Plan", "Activity Tracking", "Stretch Routine"]
-            elif c_name in ['book', 'scissors', 'clock', 'vase', 'potted plant']:
-                cat = "workbench_item"
-                dialogue = f"Observing {label.lower()} on desk."
-                interactions = [f"Inspect {label}", "Canvas Diagram"]
+            elif any(k in l_lower for k in ['board', 'arduino', 'circuit', 'resistor', 'sensor']):
+                cat = "microcontroller"
+                dialogue = f"Detected {label}. Ready for circuit connections, project ideas, and firmware."
+                interactions = ["Build Project", "Pinout Guide", "Draw Schematic", "Generate Code"]
             else:
                 cat = "object"
-                dialogue = f"Observing {label.lower()}."
+                dialogue = f"Observing {l_lower}."
                 interactions = [f"Inspect {label}", "Workspace Focus"]
 
             objects.append(DetectedObject(
@@ -434,13 +472,13 @@ class PhysicalVisionEngine:
                 confidence=round(d["confidence"], 2),
                 category=cat,
                 bbox=[bx, by, bw, bh],
-                details={"model": "YOLOv8 QNN Static", "class_id": d.get("class_id", 0)},
+                details={"model": d.get("backend", "YOLOv8"), "raw_coco": c_name},
                 interactive_dialogue=dialogue,
                 suggested_interactions=interactions
             ))
 
-
         return objects
+
 
 
 

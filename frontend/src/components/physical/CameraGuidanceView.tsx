@@ -294,6 +294,20 @@ export const CameraGuidanceView: React.FC = () => {
             }
 
             if (!tracked.has(objKey)) {
+              // If another box with a different label is occupying this spatial region, eliminate the old one instantly (replaced object)
+              tracked.forEach((existing, exKey) => {
+                if (exKey !== objKey) {
+                  const exCx = existing.currX + existing.currW / 2;
+                  const exCy = existing.currY + existing.currH / 2;
+                  const newCx = targetX + targetW / 2;
+                  const newCy = targetY + targetH / 2;
+                  const centerDist = Math.hypot(exCx - newCx, exCy - newCy);
+                  if (centerDist < Math.max(existing.currW, targetW) * 0.55) {
+                    tracked.delete(exKey);
+                  }
+                }
+              });
+
               // Spawn new tracked box
               tracked.set(objKey, {
                 id: objKey,
@@ -308,7 +322,7 @@ export const CameraGuidanceView: React.FC = () => {
                 targetY,
                 targetW,
                 targetH,
-                alpha: 0.35,
+                alpha: 0.50,
                 targetAlpha: 1.0,
                 hue,
                 missingFrames: 0
@@ -326,26 +340,26 @@ export const CameraGuidanceView: React.FC = () => {
             }
           });
 
-          // Mark missing boxes to fade out INSTANTLY when camera shifts
+          // Mark missing boxes to fade out INSTANTLY when camera shifts or object is removed
           tracked.forEach((box, key) => {
             if (!seenIds.has(key)) {
               box.missingFrames += 1;
               box.targetAlpha = 0.0;
-              box.alpha *= 0.65; // Quick snappy decay (< 100ms)
+              box.alpha *= 0.40; // Super snappy decay (< 50ms)
             }
 
             // Snappy Real-Time Lerp Speed
             const dist = Math.hypot(box.targetX - box.currX, box.targetY - box.currY);
-            const lerpSpeed = dist > 80 ? 0.88 : dist > 30 ? 0.78 : 0.65;
+            const lerpSpeed = dist > 60 ? 0.90 : dist > 20 ? 0.82 : 0.70;
 
             box.currX += (box.targetX - box.currX) * lerpSpeed;
             box.currY += (box.targetY - box.currY) * lerpSpeed;
             box.currW += (box.targetW - box.currW) * lerpSpeed;
             box.currH += (box.targetH - box.currH) * lerpSpeed;
-            box.alpha += (box.targetAlpha - box.alpha) * 0.45;
+            box.alpha += (box.targetAlpha - box.alpha) * 0.60;
 
             // Remove box immediately if gone
-            if (box.alpha < 0.06 || box.missingFrames > 3) {
+            if (box.alpha < 0.04 || box.missingFrames > 2) {
               tracked.delete(key);
               return;
             }
@@ -499,15 +513,15 @@ export const CameraGuidanceView: React.FC = () => {
 
           const vidW = video.videoWidth || 640;
           const vidH = video.videoHeight || 480;
-          const targetW = 640;
-          const targetH = Math.max(240, Math.round((vidH / vidW) * targetW));
+          const targetW = 480;
+          const targetH = Math.max(200, Math.round((vidH / vidW) * targetW));
 
           offscreen.width = targetW;
           offscreen.height = targetH;
           const ctx = offscreen.getContext('2d');
           if (ctx) {
             ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-            const imageBase64 = offscreen.toDataURL('image/jpeg', 0.80).split(',')[1];
+            const imageBase64 = offscreen.toDataURL('image/jpeg', 0.65).split(',')[1];
 
             const res = await fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
               method: 'POST',
@@ -529,7 +543,7 @@ export const CameraGuidanceView: React.FC = () => {
       }
 
       if (active) {
-        setTimeout(captureAndAnalyze, 80);
+        setTimeout(captureAndAnalyze, 45);
       }
     };
 
