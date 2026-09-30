@@ -320,7 +320,8 @@ class PhysicalVisionEngine:
         raw_dets = []
         if self.yolo_model is not None:
             try:
-                yolo_results = self.yolo_model(img, conf=0.35, verbose=False)
+                # imgsz=320 gives ~3-4x speedup vs default 640 with minimal accuracy loss
+                yolo_results = self.yolo_model(img, conf=0.40, imgsz=320, verbose=False)
                 if yolo_results and len(yolo_results) > 0:
                     r = yolo_results[0]
                     for box in r.boxes:
@@ -340,6 +341,7 @@ class PhysicalVisionEngine:
                         })
             except Exception:
                 raw_dets = []
+
 
         # 2.1 Open-World CLIP Refiner — ONLY fires when YOLO has no strong real detection.
         # This prevents CLIP from "sticking" to old scene when camera moves to a laptop/desk.

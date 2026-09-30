@@ -345,7 +345,7 @@ export const CameraGuidanceView: React.FC = () => {
             if (!seenIds.has(key)) {
               box.missingFrames += 1;
               box.targetAlpha = 0.0;
-              box.alpha *= 0.40; // Super snappy decay (< 50ms)
+              box.alpha *= 0.15; // Extremely snappy decay — gone in ~2-3 animation frames
             }
 
             // Snappy Real-Time Lerp Speed
@@ -358,8 +358,8 @@ export const CameraGuidanceView: React.FC = () => {
             box.currH += (box.targetH - box.currH) * lerpSpeed;
             box.alpha += (box.targetAlpha - box.alpha) * 0.60;
 
-            // Remove box immediately if gone
-            if (box.alpha < 0.04 || box.missingFrames > 2) {
+            // Remove box immediately if gone after 1 missed detection cycle
+            if (box.alpha < 0.04 || box.missingFrames >= 1) {
               tracked.delete(key);
               return;
             }
@@ -506,61 +506,64 @@ export const CameraGuidanceView: React.FC = () => {
     }
   }, []);
 
-  // 4. Continuous Autonomous Perception Loop (300ms for fast responsive updates)
   // 4. Low-Latency Continuous Autonomous Perception Loop
+  // Uses abort-and-restart: each tick cancels the previous in-flight request so
+  // we always reflect the latest camera frame with no blocking.
+  const inflightAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     if (!isRecording || isPaused) return;
     let active = true;
 
-    const captureAndAnalyze = async () => {
+    const captureAndAnalyze = () => {
       if (!active) return;
-      if (videoRef.current && videoRef.current.videoWidth > 0 && !isAnalyzingRef.current) {
+      if (videoRef.current && videoRef.current.videoWidth > 0) {
+        // Cancel any in-flight request immediately — we want the latest frame
+        if (inflightAbortRef.current) {
+          inflightAbortRef.current.abort();
+        }
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        inflightAbortRef.current = controller;
 
-        try {
-          isAnalyzingRef.current = true;
-          const video = videoRef.current;
-          const offscreen = document.createElement('canvas');
+        const video = videoRef.current;
+        const offscreen = document.createElement('canvas');
+        const vidW = video.videoWidth || 640;
+        const vidH = video.videoHeight || 480;
+        // 320px width — 3x faster YOLO inference vs 480px, still accurate
+        const targetW = 320;
+        const targetH = Math.max(180, Math.round((vidH / vidW) * targetW));
+        offscreen.width = targetW;
+        offscreen.height = targetH;
+        const ctx = offscreen.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+          const imageBase64 = offscreen.toDataURL('image/jpeg', 0.60).split(',')[1];
 
-          const vidW = video.videoWidth || 640;
-          const vidH = video.videoHeight || 480;
-          const targetW = 480;
-          const targetH = Math.max(200, Math.round((vidH / vidW) * targetW));
-
-          offscreen.width = targetW;
-          offscreen.height = targetH;
-          const ctx = offscreen.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-            const imageBase64 = offscreen.toDataURL('image/jpeg', 0.65).split(',')[1];
-
-            const res = await fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image_base64: imageBase64, project_context: 'Workspace Perception' }),
-              signal: controller.signal
-            });
-
-            if (res.ok) {
-              const data = await res.json();
-              handleAnalysisData(data, offscreen.width, offscreen.height);
-            }
-          }
-        } catch {
-        } finally {
-          clearTimeout(timeoutId);
-          isAnalyzingRef.current = false;
+          // Fire and forget — don't await, never block the capture loop
+          fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_base64: imageBase64, project_context: 'Workspace Perception' }),
+            signal: controller.signal
+          })
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+              if (data && active) handleAnalysisData(data, offscreen.width, offscreen.height);
+            })
+            .catch(() => {}); // aborted requests silently ignored
         }
       }
 
       if (active) {
-        setTimeout(captureAndAnalyze, 45);
+        setTimeout(captureAndAnalyze, 120); // 120ms = ~8fps analysis, non-blocking
       }
     };
 
     captureAndAnalyze();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      if (inflightAbortRef.current) inflightAbortRef.current.abort();
+    };
   }, [isRecording, isPaused, handleAnalysisData]);
 
   // 5. Initial status sync on load
