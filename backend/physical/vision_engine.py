@@ -72,14 +72,23 @@ class PhysicalVisionEngine:
         except Exception:
             self.yolo_model = None
 
-        # 2. Open-World Zero-Shot CLIP Refiner for physical objects & room appliances (fans, coolers, etc.)
+        # 2. Open-World Zero-Shot CLIP Refiner — covers electronics, appliances, and room fixtures
         self.clip_model = None
         self.clip_preprocess = None
         self.clip_tokens = None
         self.open_candidates = [
-            'ceiling fan', 'electric fan', 'room air cooler', 'refrigerator',
-            'microwave', 'oven', 'washing machine', 'television', 'laptop computer', 'computer monitor',
-            'chair', 'table', 'desk', 'coffee mug', 'water bottle', 'circuit board'
+            # --- Room Appliances & Fixtures ---
+            'ceiling fan', 'electric fan', 'room air cooler', 'air conditioner',
+            'refrigerator', 'microwave oven', 'washing machine', 'television',
+            # --- Electronics & Workspace ---
+            'laptop computer', 'computer monitor', 'smartphone',
+            # --- Electronics Project Components ---
+            'arduino microcontroller board', 'raspberry pi board', 'circuit board PCB',
+            'breadboard', 'electronic resistor', 'jumper wires', 'LED strip light',
+            'soldering iron', 'multimeter', 'USB cable', 'earphones earbuds',
+            'electronic sensor module', 'power bank battery pack',
+            # --- General workspace ---
+            'coffee mug', 'water bottle', 'notebook book',
         ]
         try:
             import clip
@@ -197,14 +206,18 @@ class PhysicalVisionEngine:
                 suggested_action="Synchronize notes or check mobile device context."
             )
 
-        # 3. Hardware Workbench & Repair Tools
-        if any(k in all_text for k in ["scissors", "tool", "hardware", "screwdriver", "circuit", "board"]):
-            return ActivityContext(
+        # 3. Hardware Workbench & Electronics Prototyping
+        if any(k in all_text for k in [
+            "scissors", "tool", "hardware", "screwdriver", "circuit", "board",
+            "arduino", "raspberry", "breadboard", "resistor", "jumper", "led",
+            "soldering", "multimeter", "pcb", "sensor", "microcontroller",
+            "usb cable", "power bank", "electronic", "wires"
+        ]):\n            return ActivityContext(
                 activity_type="hardware_repair",
-                headline="Hardware Prototyping & Repair",
-                details="Tools or hardware components detected on workbench.",
+                headline="Hardware Prototyping & Electronics Workbench",
+                details="Electronic components, boards, or tools detected on workbench. Ready to assist with wiring, code, and schematics.",
                 clutter_level="moderate",
-                suggested_action="Verify pin polarities and check circuit continuity."
+                suggested_action="Suggest pinout guide, draw circuit diagram, and generate firmware code."
             )
 
         # 3. Workstation & Coding Session (Face or Laptop or Mouse or Keyboard or Human)
@@ -344,28 +357,40 @@ class PhysicalVisionEngine:
 
 
         # 2.1 Open-World CLIP Refiner — ONLY fires when YOLO has no strong real detection.
-        # This prevents CLIP from "sticking" to old scene when camera moves to a laptop/desk.
-        # CLIP surrogate labels — objects COCO-YOLO commonly misclassifies appliances as:
-        _yolo_surrogate_labels = {'sink', 'toilet', 'sports ball', 'bench', 'frisbee', 'kite', 'umbrella'}
-        # Real YOLO classes that definitively name the scene — CLIP must NOT override these:
+        # Prevents CLIP from "sticking" to old scene when camera moves to a different object.
+        #
+        # COCO-YOLO surrogate misclassifications to watch for:
+        #   Circuit boards / PCBs → 'dining table', 'book', 'remote'
+        #   Fans / coolers       → 'sink', 'toilet', 'sports ball'
+        #   Wires / cables       → 'snake', 'tie'
+        _yolo_surrogate_labels = {
+            'sink', 'toilet', 'sports ball', 'bench', 'frisbee', 'kite', 'umbrella',
+            'dining table',   # ← #1 misclass for circuit boards / PCBs (e.g. Arduino)
+            'remote',         # ← misclass for small electronics modules
+            'book',           # ← misclass for flat PCBs / breadboards
+            'tie',            # ← misclass for cables / wires
+            'skateboard',     # ← misclass for flat boards
+        }
+        # Real YOLO classes that clearly name what's in the scene — CLIP must NOT override these
+        # NOTE: 'dining table' intentionally REMOVED — it's a known Arduino/PCB surrogate
         _yolo_real_labels = {
             'laptop', 'keyboard', 'mouse', 'cell phone', 'tv', 'remote', 'monitor',
-            'book', 'cup', 'bowl', 'bottle', 'fork', 'knife', 'spoon',
+            'cup', 'bowl', 'bottle', 'fork', 'knife', 'spoon',
             'banana', 'apple', 'orange', 'pizza', 'sandwich', 'broccoli', 'carrot',
-            'person', 'chair', 'couch', 'bed', 'dining table',
-            'backpack', 'handbag', 'suitcase', 'tie', 'clock', 'vase', 'scissors',
+            'person', 'chair', 'couch', 'bed',
+            'backpack', 'handbag', 'suitcase', 'clock', 'vase', 'scissors',
             'teddy bear', 'hair drier', 'toothbrush'
         }
 
         # Check: does YOLO already have at least one confident real detection?
-        yolo_has_real = any(d['label'].lower() in _yolo_real_labels and d['confidence'] >= 0.40
+        yolo_has_real = any(d['label'].lower() in _yolo_real_labels and d['confidence'] >= 0.45
                             for d in raw_dets)
         # Check: are ALL YOLO detections surrogates/ambiguous?
         yolo_only_surrogates = (
             len(raw_dets) > 0 and
             all(d['label'].lower() in _yolo_surrogate_labels for d in raw_dets)
         )
-        # Check: YOLO found nothing at all (empty room / wide scene)
+        # Check: YOLO found nothing at all
         yolo_empty = len(raw_dets) == 0
 
         # Only invoke CLIP if YOLO has no real scene understanding
@@ -385,26 +410,53 @@ class PhysicalVisionEngine:
                 clip_label = self.open_candidates[top_idx].title()
                 clip_conf = float(probs[top_idx])
 
-                # High-confidence open-world room fixture/appliance recognition (> 55%)
-                if clip_conf >= 0.55 and any(k in clip_label.lower() for k in ['fan', 'cooler', 'conditioner', 'refrigerator']):
-                    # Remove any surrogate raw_det that triggered CLIP
+                # Accept any CLIP result above 45% — covers electronics, appliances, and fixtures
+                if clip_conf >= 0.45:
+                    # Remove any surrogate raw_det that CLIP is replacing
                     matched_bbox = None
                     for d in list(raw_dets):
-                        dbx, dby, dbw, dbh = d['bbox']
                         if d['label'].lower() in _yolo_surrogate_labels:
-                            matched_bbox = [dbx, dby, dbw, dbh]
+                            matched_bbox = list(d['bbox'])
                             raw_dets.remove(d)
                             break
 
-                    bbox = matched_bbox or [int(w * 0.08), int(h * 0.08), int(w * 0.84), int(h * 0.84)]
+                    bbox = matched_bbox or [int(w * 0.05), int(h * 0.05), int(w * 0.90), int(h * 0.90)]
+                    l_lower = clip_label.lower()
+
+                    # Dynamically resolve category + interactions based on CLIP label content
+                    if any(k in l_lower for k in [
+                        'arduino', 'raspberry', 'circuit', 'pcb', 'breadboard',
+                        'resistor', 'jumper', 'led', 'sensor', 'soldering',
+                        'multimeter', 'usb cable', 'power bank', 'electronic'
+                    ]):
+                        cat = "microcontroller"
+                        dialogue = f"Detected {clip_label} on your workbench. Ready for pinout guide, wiring, and code."
+                        interactions = ["Pinout Guide", "Build Project", "Draw Schematic", "Generate Code"]
+                    elif any(k in l_lower for k in ['earphone', 'earbud']):
+                        cat = "electronics"
+                        dialogue = f"Detected {clip_label}. Ready to check specs or pair device."
+                        interactions = ["Device Specs", "Pairing Guide", "Audio Settings"]
+                    elif any(k in l_lower for k in ['fan', 'cooler', 'conditioner', 'refrigerator', 'microwave', 'washing']):
+                        cat = "appliance"
+                        dialogue = f"Observing {clip_label.lower()} in your room."
+                        interactions = [f"Inspect {clip_label}", "Canvas Diagram", "Smart Control"]
+                    elif any(k in l_lower for k in ['laptop', 'monitor', 'smartphone', 'television']):
+                        cat = "electronics"
+                        dialogue = f"Detected {clip_label.lower()} in workspace."
+                        interactions = [f"Inspect {clip_label}", "Focus Tracking", "Desktop Automation"]
+                    else:
+                        cat = "object"
+                        dialogue = f"Observing {clip_label.lower()}."
+                        interactions = [f"Inspect {clip_label}", "Workspace Focus"]
+
                     objects.append(DetectedObject(
                         label=clip_label,
                         confidence=round(clip_conf, 2),
-                        category="appliance",
+                        category=cat,
                         bbox=bbox,
-                        details={"model": "CLIP Zero-Shot Open-World", "score": round(clip_conf, 2)},
-                        interactive_dialogue=f"Observing {clip_label.lower()} in your room.",
-                        suggested_interactions=[f"Inspect {clip_label}", "Canvas Diagram", "Smart Control"]
+                        details={"model": "CLIP Zero-Shot", "score": round(clip_conf, 2)},
+                        interactive_dialogue=dialogue,
+                        suggested_interactions=interactions
                     ))
             except Exception:
                 pass
