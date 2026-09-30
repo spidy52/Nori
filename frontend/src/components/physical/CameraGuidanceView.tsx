@@ -506,65 +506,65 @@ export const CameraGuidanceView: React.FC = () => {
     }
   }, []);
 
-  // 4. Low-Latency Continuous Autonomous Perception Loop
-  // Uses abort-and-restart: each tick cancels the previous in-flight request so
-  // we always reflect the latest camera frame with no blocking.
-  const inflightAbortRef = useRef<AbortController | null>(null);
-
+  // 4. Sequential Autonomous Perception Loop
+  // Awaits each backend response before scheduling the next capture.
+  // This ensures results are actually processed (no aborted responses)
+  // and keeps backend load at a steady ~3 requests/second.
   useEffect(() => {
     if (!isRecording || isPaused) return;
     let active = true;
 
-    const captureAndAnalyze = () => {
-      if (!active) return;
-      if (videoRef.current && videoRef.current.videoWidth > 0) {
-        // Cancel any in-flight request immediately — we want the latest frame
-        if (inflightAbortRef.current) {
-          inflightAbortRef.current.abort();
+    const captureAndAnalyze = async () => {
+      while (active) {
+        const loopStart = Date.now();
+
+        if (videoRef.current && videoRef.current.videoWidth > 0) {
+          try {
+            const video = videoRef.current;
+            const offscreen = document.createElement('canvas');
+            const vidW = video.videoWidth || 640;
+            const vidH = video.videoHeight || 480;
+            const targetW = 320;
+            const targetH = Math.max(180, Math.round((vidH / vidW) * targetW));
+            offscreen.width = targetW;
+            offscreen.height = targetH;
+            const ctx = offscreen.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+              const imageBase64 = offscreen.toDataURL('image/jpeg', 0.60).split(',')[1];
+
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 1500);
+
+              const res = await fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_base64: imageBase64, project_context: 'Workspace Perception' }),
+                signal: controller.signal
+              });
+              clearTimeout(timeout);
+
+              if (res.ok && active) {
+                const data = await res.json();
+                if (active) handleAnalysisData(data, offscreen.width, offscreen.height);
+              }
+            }
+          } catch {
+            // timeout or network error — just continue to next loop
+          }
         }
-        const controller = new AbortController();
-        inflightAbortRef.current = controller;
 
-        const video = videoRef.current;
-        const offscreen = document.createElement('canvas');
-        const vidW = video.videoWidth || 640;
-        const vidH = video.videoHeight || 480;
-        // 320px width — 3x faster YOLO inference vs 480px, still accurate
-        const targetW = 320;
-        const targetH = Math.max(180, Math.round((vidH / vidW) * targetW));
-        offscreen.width = targetW;
-        offscreen.height = targetH;
-        const ctx = offscreen.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-          const imageBase64 = offscreen.toDataURL('image/jpeg', 0.60).split(',')[1];
-
-          // Fire and forget — don't await, never block the capture loop
-          fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_base64: imageBase64, project_context: 'Workspace Perception' }),
-            signal: controller.signal
-          })
-            .then(res => res.ok ? res.json() : null)
-            .then(data => {
-              if (data && active) handleAnalysisData(data, offscreen.width, offscreen.height);
-            })
-            .catch(() => {}); // aborted requests silently ignored
-        }
-      }
-
-      if (active) {
-        setTimeout(captureAndAnalyze, 120); // 120ms = ~8fps analysis, non-blocking
+        // Wait out the remainder of 300ms minimum interval
+        const elapsed = Date.now() - loopStart;
+        const wait = Math.max(0, 300 - elapsed);
+        await new Promise(resolve => setTimeout(resolve, wait));
       }
     };
 
     captureAndAnalyze();
-    return () => {
-      active = false;
-      if (inflightAbortRef.current) inflightAbortRef.current.abort();
-    };
+    return () => { active = false; };
   }, [isRecording, isPaused, handleAnalysisData]);
+
 
   // 5. Initial status sync on load
   useEffect(() => {
