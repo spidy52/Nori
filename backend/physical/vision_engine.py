@@ -62,63 +62,35 @@ class FrameAnalysisResult(BaseModel):
 
 class PhysicalVisionEngine:
     def __init__(self):
-        # 1. Primary: Load QNN-Compatible Static YOLOv8n Engine (Qualcomm Hexagon NPU / Host CPU Fallback)
-        self.qnn_yolo = None
-        if YOLOv8QNNEngine is not None:
-            try:
-                self.qnn_yolo = YOLOv8QNNEngine("yolov8n_qnn.onnx")
-            except Exception as e:
-                self.qnn_yolo = None
-
-        # 2. Secondary Fallback: PyTorch Ultralytics Model
+        # 1. Primary Neural Vision Detector (YOLOv8)
+        self.yolo_model = None
         try:
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            possible_paths = [
-                os.path.join(project_root, 'yolov8s.pt'),
-                os.path.join(project_root, 'yolov8n.pt'),
-                os.path.join(project_root, 'weights', 'yolov8n.pt'),
-                os.path.join(os.getcwd(), 'yolov8n.pt'),
-                'yolov8n.pt'
-            ]
-            chosen_path = next((p for p in possible_paths if os.path.exists(p)), None)
-            if chosen_path:
-                self.yolo_model = YOLO(chosen_path)
-            else:
-                self.yolo_model = None
+            for p in ['yolov8s.pt', 'yolov8n.pt', os.path.join(os.getcwd(), 'yolov8s.pt')]:
+                if os.path.exists(p):
+                    self.yolo_model = YOLO(p)
+                    break
         except Exception:
             self.yolo_model = None
 
-        # 3. Secondary High-Recall Model for faint / motion-blurred objects (e.g. spinning fans)
-        try:
-            s_path = os.path.join(os.getcwd(), 'yolov8s.pt')
-            self.yolo_s = YOLO(s_path) if os.path.exists(s_path) else None
-        except Exception:
-            self.yolo_s = None
-
-        # 4. Open-World Zero-Shot CLIP Refiner for physical objects & room appliances (fans, coolers, etc.)
+        # 2. Open-World Zero-Shot CLIP Refiner for physical objects & room appliances (fans, coolers, etc.)
         self.clip_model = None
         self.clip_preprocess = None
-        self.clip_text_emb = None
+        self.clip_tokens = None
         self.open_candidates = [
-            'ceiling fan', 'table fan', 'air cooler', 'air conditioner', 'refrigerator',
-            'microwave', 'oven', 'washing machine', 'kitchen sink', 'toilet',
-            'laptop computer', 'computer monitor', 'television', 'coffee mug', 'water bottle',
-            'desk', 'chair', 'couch', 'bed', 'book', 'clock', 'circuit board'
+            'ceiling fan', 'electric fan', 'room air cooler', 'refrigerator',
+            'microwave', 'oven', 'washing machine', 'television', 'laptop computer', 'computer monitor',
+            'chair', 'table', 'desk', 'coffee mug', 'water bottle', 'circuit board'
         ]
         try:
             import clip
-            import torch
             clip_path = os.path.join(os.getcwd(), 'weights', 'clip', 'ViT-B-32.pt')
             if os.path.exists(clip_path):
                 self.clip_model, self.clip_preprocess = clip.load(clip_path, device='cpu')
-                tokens = clip.tokenize([f'a photo of a {c}' for c in self.open_candidates])
-                with torch.no_grad():
-                    self.clip_text_emb = self.clip_model.encode_text(tokens)
-                    self.clip_text_emb /= self.clip_text_emb.norm(dim=-1, keepdim=True)
+                self.clip_tokens = clip.tokenize([f'a photo of a {c}' for c in self.open_candidates])
         except Exception:
             self.clip_model = None
 
-        # 5. Load OpenCV YuNet Deep Learning Face Detector
+        # 3. OpenCV YuNet Deep Learning Face Detector
         model_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
         yunet_path = os.path.join(model_dir, 'face_detection_yunet.onnx')
         self.face_detector = None
@@ -136,6 +108,7 @@ class PhysicalVisionEngine:
 
         # Zero suppressed classes: All objects are dynamically allowed
         self.suppressed_classes = set()
+
 
     def decode_image(self, image_data: Union[bytes, str]) -> Optional[np.ndarray]:
         """Decodes raw bytes, data URL, or base64 into an OpenCV BGR image."""
@@ -342,18 +315,12 @@ class PhysicalVisionEngine:
         has_human_presence = bool(face_boxes)
 
         # -----------------------------------------------------------------
-        # 2. NEURAL VISION WITH OPEN-WORLD ZERO-SHOT REFINEMENT
+        # 2. NEURAL OBJECT DETECTION & OPEN-WORLD SCENE PERCEPTION
         # -----------------------------------------------------------------
         raw_dets = []
-        if self.qnn_yolo is not None and self.qnn_yolo.is_loaded:
+        if self.yolo_model is not None:
             try:
-                raw_dets, _ = self.qnn_yolo.detect(img, conf_thresh=0.20, iou_thresh=0.45)
-            except Exception:
-                raw_dets = []
-
-        if len(raw_dets) == 0 and self.yolo_model is not None:
-            try:
-                yolo_results = self.yolo_model(img, conf=0.18, verbose=False)
+                yolo_results = self.yolo_model(img, conf=0.35, verbose=False)
                 if yolo_results and len(yolo_results) > 0:
                     r = yolo_results[0]
                     for box in r.boxes:
@@ -369,40 +336,51 @@ class PhysicalVisionEngine:
                             "class_id": cid,
                             "label": c_name,
                             "confidence": score,
-                            "bbox": [bx, by, bw, bh],
-                            "backend": "PyTorch_CPU",
-                            "device": "Host CPU"
+                            "bbox": [bx, by, bw, bh]
                         })
             except Exception:
                 raw_dets = []
 
-        # High-recall fallback for faint or motion-blurred items (e.g. spinning ceiling fan)
-        if len(raw_dets) == 0 and self.yolo_s is not None:
+        # 2.1 Open-World Subject Perception (Ceiling Fans, Air Coolers, Room Appliances)
+        if self.clip_model is not None and self.clip_tokens is not None:
             try:
-                yolo_results = self.yolo_s(img, conf=0.18, verbose=False)
-                if yolo_results and len(yolo_results) > 0:
-                    r = yolo_results[0]
-                    for box in r.boxes:
-                        cid = int(box.cls[0].item())
-                        c_name = r.names.get(cid, "object")
-                        score = float(box.conf[0].item())
-                        xyxy = box.xyxy[0].tolist()
-                        bx = int(max(0, xyxy[0]))
-                        by = int(max(0, xyxy[1]))
-                        bw = int(max(1, xyxy[2] - xyxy[0]))
-                        bh = int(max(1, xyxy[3] - xyxy[1]))
-                        raw_dets.append({
-                            "class_id": cid,
-                            "label": c_name,
-                            "confidence": score,
-                            "bbox": [bx, by, bw, bh],
-                            "backend": "YOLOv8s_Fallback",
-                            "device": "Host CPU"
-                        })
+                import torch
+                from PIL import Image
+                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                tensor = self.clip_preprocess(pil_img).unsqueeze(0).to('cpu')
+                with torch.no_grad():
+                    logits, _ = self.clip_model(tensor, self.clip_tokens)
+                    probs = logits.softmax(dim=-1).cpu().numpy()[0]
+
+                top_idx = probs.argmax()
+                clip_label = self.open_candidates[top_idx].title()
+                clip_conf = float(probs[top_idx])
+
+                # High-confidence open-world room fixture/appliance recognition (> 55%)
+                if clip_conf >= 0.55 and any(k in clip_label.lower() for k in ['fan', 'cooler', 'conditioner', 'refrigerator']):
+                    matched_bbox = None
+                    for d in list(raw_dets):
+                        dbx, dby, dbw, dbh = d['bbox']
+                        # Match if a large box or surrogate box exists
+                        if dbw >= w * 0.35 or dbh >= h * 0.35 or d['label'].lower() in ['sink', 'toilet', 'bench', 'chair']:
+                            matched_bbox = [dbx, dby, dbw, dbh]
+                            raw_dets.remove(d)
+                            break
+
+                    bbox = matched_bbox or [int(w * 0.08), int(h * 0.08), int(w * 0.84), int(h * 0.84)]
+                    objects.append(DetectedObject(
+                        label=clip_label,
+                        confidence=round(clip_conf, 2),
+                        category="appliance",
+                        bbox=bbox,
+                        details={"model": "CLIP Zero-Shot Open-World", "score": round(clip_conf, 2)},
+                        interactive_dialogue=f"Observing {clip_label.lower()} in your room.",
+                        suggested_interactions=[f"Inspect {clip_label}", "Canvas Diagram", "Smart Control"]
+                    ))
             except Exception:
                 pass
 
-        # Process each detected bounding box dynamically
+        # 2.2 Process all remaining authentic neural detections (conf >= 0.35)
         for d in raw_dets:
             c_name = d["label"].lower()
             if c_name == 'person':
@@ -410,35 +388,15 @@ class PhysicalVisionEngine:
                 if face_boxes:
                     continue
 
+            # Ignore COCO surrogate misclassifications if full-frame (like bench/chair covering whole screen)
             bx, by, bw, bh = d["bbox"]
-            # Only ignore boxes that cover virtually 100% of the screen
-            if bw >= w * 0.98 and bh >= h * 0.98:
+            if (bw >= w * 0.90 and bh >= h * 0.90) and c_name in ['bench', 'chair', 'couch', 'bed']:
                 continue
 
-            crop = img[by:by+bh, bx:bx+bw]
-
-            # 2.1 Refine ambiguous COCO surrogate classes (sink, toilet, sports ball on fans/appliances) via CLIP
             label = c_name.title()
-            if self.clip_model is not None and self.clip_text_emb is not None and c_name in [
-                'sink', 'toilet', 'refrigerator', 'microwave', 'oven', 'sports ball', 'clock', 'vase'
-            ]:
-                if crop.size > 0:
-                    try:
-                        import torch
-                        from PIL import Image
-                        pil_c = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                        tensor = self.clip_preprocess(pil_c).unsqueeze(0).to('cpu')
-                        with torch.no_grad():
-                            im_f = self.clip_model.encode_image(tensor)
-                            im_f /= im_f.norm(dim=-1, keepdim=True)
-                            sims = (im_f @ self.clip_text_emb.T).softmax(dim=-1).cpu().numpy()[0]
-                        best_idx = sims.argmax()
-                        label = self.open_candidates[best_idx].title()
-                    except Exception:
-                        pass
-
-            # 2.2 Dynamic category & dialogue resolution (Zero hardcoded object lists)
             l_lower = label.lower()
+
+            # Dynamic category & dialogue resolution (Zero hardcoded object lists)
             if any(k in l_lower for k in ['fan', 'cooler', 'conditioner', 'refrigerator', 'microwave', 'oven', 'toaster', 'sink', 'appliance', 'washer']):
                 cat = "appliance"
                 dialogue = f"Observing {l_lower} in your room."
@@ -472,12 +430,13 @@ class PhysicalVisionEngine:
                 confidence=round(d["confidence"], 2),
                 category=cat,
                 bbox=[bx, by, bw, bh],
-                details={"model": d.get("backend", "YOLOv8"), "raw_coco": c_name},
+                details={"model": "YOLOv8", "raw_coco": c_name},
                 interactive_dialogue=dialogue,
                 suggested_interactions=interactions
             ))
 
         return objects
+
 
 
 

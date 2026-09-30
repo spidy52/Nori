@@ -462,8 +462,19 @@ export const CameraGuidanceView: React.FC = () => {
     }
 
     // Dynamic Activity Synthesis from backend
+    // Backend returns: activity_type, headline, details, clutter_level, suggested_action
+    // Frontend ActivityState expects: category, title, description, confidence, suggested_actions
     if (data.activity) {
-      setActivityInfo(data.activity);
+      const act = data.activity;
+      setActivityInfo({
+        category: act.activity_type || act.category || 'general',
+        title: act.headline || act.title || 'Workspace Active',
+        description: act.details || act.description || 'Monitoring workspace.',
+        confidence: act.confidence ?? 0.92,
+        suggested_actions: act.suggested_action
+          ? [act.suggested_action]
+          : (act.suggested_actions || ['Inspect Workspace'])
+      });
     }
 
     // Filter desk objects for list display
@@ -482,7 +493,8 @@ export const CameraGuidanceView: React.FC = () => {
         category: obj.category || 'Workspace',
         bbox: obj.bbox,
         color,
-        details: obj.details,
+        // Merge suggested_interactions into details so card can render action chips
+        details: { ...(obj.details || {}), interactions: obj.suggested_interactions || [] },
         dialogue: obj.interactive_dialogue
       };
     });
@@ -1000,6 +1012,23 @@ export const CameraGuidanceView: React.FC = () => {
               <p className="text-xs text-slate-300 leading-relaxed">{activityInfo.description}</p>
             </div>
 
+            {/* Suggested Action from Activity Context */}
+            {activityInfo.suggested_actions && activityInfo.suggested_actions.length > 0 && (
+              <div className="pt-1 border-t border-white/[0.06] space-y-1.5">
+                <span className="text-[11px] text-slate-400 block font-mono">Nori Suggests:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {activityInfo.suggested_actions.slice(0, 3).map((action, i) => (
+                    <span
+                      key={i}
+                      className="px-2 py-0.5 rounded bg-orange-500/15 border border-orange-500/30 text-orange-300 text-[10px] font-mono cursor-default"
+                    >
+                      {action}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="pt-1 border-t border-white/[0.06]">
               <span className="text-[11px] text-slate-400 block font-mono">Cognitive Attention:</span>
               <span className="text-xs font-bold text-emerald-400">{userFocusState}</span>
@@ -1056,7 +1085,7 @@ export const CameraGuidanceView: React.FC = () => {
                 </span>
               </div>
             ) : (
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                 {detections.map((d, idx) => {
                   let hash = 0;
                   for (let i = 0; i < d.label.length; i++) {
@@ -1064,28 +1093,57 @@ export const CameraGuidanceView: React.FC = () => {
                   }
                   const hue = d.category === 'human_mood' ? 188 : d.category === 'handheld_gadget' ? 280 : Math.abs(hash) % 360;
                   const dotColor = `hsl(${hue}, 90%, 55%)`;
+                  const interactions: string[] = (d.details as any)?.interactions || [];
 
                   return (
                     <div
                       key={idx}
-                      className="p-3 rounded-md bg-[#121522] border border-white/[0.08] flex items-center justify-between transition-all hover:bg-[#151928]"
+                      className="p-3 rounded-md bg-[#121522] border border-white/[0.08] space-y-2 transition-all hover:bg-[#151928]"
                       style={{ borderLeftColor: dotColor, borderLeftWidth: 3 }}
                     >
-                      <div className="flex items-center gap-2.5 overflow-hidden">
-                        <span
-                          className="w-2 h-2 rounded-sm shrink-0"
-                          style={{ backgroundColor: dotColor, boxShadow: `0 0 8px ${dotColor}` }}
-                        />
-                        <div className="truncate">
-                          <span className="text-xs font-bold text-white block truncate">{d.label}</span>
-                          <span className="text-[10px] text-slate-400 uppercase font-mono block">
-                            {d.category.replace('_', ' ')}
-                          </span>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5 overflow-hidden">
+                          <span
+                            className="w-2 h-2 rounded-sm shrink-0"
+                            style={{ backgroundColor: dotColor, boxShadow: `0 0 8px ${dotColor}` }}
+                          />
+                          <div className="truncate">
+                            <span className="text-xs font-bold text-white block truncate">{d.label}</span>
+                            <span className="text-[10px] text-slate-400 uppercase font-mono block">
+                              {d.category.replace('_', ' ')}
+                            </span>
+                          </div>
                         </div>
+                        <span className="text-xs font-mono font-bold text-slate-300 ml-2 shrink-0">
+                          {Math.round(d.confidence * 100)}%
+                        </span>
                       </div>
-                      <span className="text-xs font-mono font-bold text-slate-300 ml-2 shrink-0">
-                        {Math.round(d.confidence * 100)}%
-                      </span>
+
+                      {/* Dialogue hint */}
+                      {d.dialogue && (
+                        <p className="text-[10px] text-slate-400 leading-relaxed pl-4 border-l border-white/10">
+                          {d.dialogue}
+                        </p>
+                      )}
+
+                      {/* Dynamic Interaction Chips */}
+                      {interactions.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-0.5">
+                          {interactions.slice(0, 4).map((action: string, i: number) => (
+                            <span
+                              key={i}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-mono cursor-default border"
+                              style={{
+                                color: dotColor,
+                                borderColor: `${dotColor}50`,
+                                backgroundColor: `${dotColor}12`
+                              }}
+                            >
+                              {action}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
