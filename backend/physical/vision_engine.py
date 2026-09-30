@@ -364,12 +364,17 @@ class PhysicalVisionEngine:
         #   Fans / coolers       → 'sink', 'toilet', 'sports ball'
         #   Wires / cables       → 'snake', 'tie'
         _yolo_surrogate_labels = {
+            # Appliance / fixture surrogates
             'sink', 'toilet', 'sports ball', 'bench', 'frisbee', 'kite', 'umbrella',
+            # Circuit board / PCB surrogates (flat rectangular close-up objects)
             'dining table',   # ← #1 misclass for circuit boards / PCBs (e.g. Arduino)
             'remote',         # ← misclass for small electronics modules
             'book',           # ← misclass for flat PCBs / breadboards
             'tie',            # ← misclass for cables / wires
             'skateboard',     # ← misclass for flat boards
+            # Vehicle classes fired on large electronics at imgsz=320
+            'truck', 'car', 'bus', 'motorcycle', 'bicycle',
+            'airplane', 'boat', 'train',
         }
         # Real YOLO classes that clearly name what's in the scene — CLIP must NOT override these
         # NOTE: 'dining table' intentionally REMOVED — it's a known Arduino/PCB surrogate
