@@ -467,18 +467,27 @@ class PhysicalVisionEngine:
                 pass
 
 
-        # 2.2 Process all remaining authentic neural detections (conf >= 0.35)
+        # 2.2 Process all remaining authentic neural detections
         for d in raw_dets:
             c_name = d["label"].lower()
+
+            # --- SURROGATE SUPPRESSION ---
+            # If YOLO fired a known surrogate label (truck/car/dining table/book/tie...)
+            # on what is actually an electronic component or appliance, silently drop it.
+            # CLIP has already fired (or will) to replace it with the correct label.
+            if c_name in _yolo_surrogate_labels:
+                continue
+
             if c_name == 'person':
                 has_human_presence = True
                 if face_boxes:
                     continue
 
-            # Ignore COCO surrogate misclassifications if full-frame (like bench/chair covering whole screen)
+            # Ignore full-frame furniture false positives
             bx, by, bw, bh = d["bbox"]
             if (bw >= w * 0.90 and bh >= h * 0.90) and c_name in ['bench', 'chair', 'couch', 'bed']:
                 continue
+
 
             label = c_name.title()
             l_lower = label.lower()
