@@ -20,6 +20,13 @@ try:
 except Exception:
     YOLO = None
 
+try:
+    from backend.physical.yolo_qnn_engine import YOLOv8QNNEngine
+except Exception:
+    YOLOv8QNNEngine = None
+
+from backend.physical.electronics_detector import electronics_engine
+
 class DetectedObject(BaseModel):
     label: str
     confidence: float
@@ -55,7 +62,15 @@ class FrameAnalysisResult(BaseModel):
 
 class PhysicalVisionEngine:
     def __init__(self):
-        # 1. Load Official Ultralytics YOLOv8n Model
+        # 1. Primary: Load QNN-Compatible Static YOLOv8n Engine (Qualcomm Hexagon NPU / Host CPU Fallback)
+        self.qnn_yolo = None
+        if YOLOv8QNNEngine is not None:
+            try:
+                self.qnn_yolo = YOLOv8QNNEngine("yolov8n_qnn.onnx")
+            except Exception as e:
+                self.qnn_yolo = None
+
+        # 2. Secondary Fallback: PyTorch Ultralytics Model
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             possible_paths = [
@@ -66,7 +81,7 @@ class PhysicalVisionEngine:
                 'yolov8n.pt'
             ]
             chosen_path = next((p for p in possible_paths if os.path.exists(p)), None)
-            if chosen_path:
+            if chosen_path and (self.qnn_yolo is None or not self.qnn_yolo.is_loaded):
                 self.yolo_model = YOLO(chosen_path)
             else:
                 self.yolo_model = None
@@ -89,14 +104,8 @@ class PhysicalVisionEngine:
             except Exception:
                 self.face_detector = None
 
-        # Unlikely desktop false-positive classes to ignore (cutlery, room walls/furniture/pets misclassified as appliances)
-        self.suppressed_classes = {
-            'refrigerator', 'microwave', 'oven', 'toaster', 'sink', 'toilet', 'cat', 'dog', 'bed', 'couch', 'chair',
-            'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'train', 'airplane', 'boat', 'bench', 'kite',
-            'knife', 'fork', 'spoon', 'baseball bat', 'tennis racket', 'skateboard', 'surfboard', 'person', 'human',
-            'toothbrush', 'hair drier', 'tie', 'umbrella', 'handbag', 'backpack', 'suitcase', 'frisbee', 'skis', 'snowboard'
-        }
-
+        # Zero suppressed classes: All objects (cooking, dining, tools, furniture, room items) are dynamically allowed
+        self.suppressed_classes = set()
 
     def decode_image(self, image_data: Union[bytes, str]) -> Optional[np.ndarray]:
         """Decodes raw bytes, data URL, or base64 into an OpenCV BGR image."""
@@ -128,7 +137,7 @@ class PhysicalVisionEngine:
     def _synthesize_activity(self, detected_objects: List[DetectedObject]) -> ActivityContext:
         """
         Synthesizes visual detections into active user life context:
-        Work & Coding, Mobile Interaction, Hardware Repair, or Standby.
+        Cooking & Dining, Work & Coding, Hardware Repair, or Standby.
         """
         labels = [o.label.lower() for o in detected_objects]
         categories = [o.category.lower() for o in detected_objects]
@@ -142,6 +151,20 @@ class PhysicalVisionEngine:
                 details="Multiple people detected at workstation. Proactive team assistance active.",
                 clutter_level="moderate",
                 suggested_action="Participating in group discussion with live ideas & whiteboard canvas."
+            )
+
+        # 1. Cooking, Dining & Kitchen
+        if any(k in all_text for k in [
+            "cooking", "dining", "food", "kitchen", "bowl", "cup", "bottle", "knife", "fork", "spoon",
+            "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "pizza", "oven", "microwave",
+            "toaster", "refrigerator", "sink"
+        ]):
+            return ActivityContext(
+                activity_type="cooking_and_dining",
+                headline="Culinary & Dining Session",
+                details="Culinary ingredients, food items, or dining items observed.",
+                clutter_level="moderate",
+                suggested_action="Suggesting recipes, nutritional breakdowns, and step-by-step cooking steps."
             )
         if any(k in all_text for k in ["eyewear", "spectacles", "glasses"]):
             return ActivityContext(
@@ -289,183 +312,138 @@ class PhysicalVisionEngine:
         has_human_presence = bool(face_boxes)
 
         # -----------------------------------------------------------------
-        # 2. OFFICIAL ULTRALYTICS YOLOV8 UNIVERSAL OBJECT DETECTION
+        # 2. QUALCOMM HEXAGON NPU / HOST CPU STATIC YOLOV8 DETECTION
         # -----------------------------------------------------------------
-        if self.yolo_model is not None:
+        raw_dets = []
+        if self.qnn_yolo is not None and self.qnn_yolo.is_loaded:
             try:
-                yolo_results = self.yolo_model(img, conf=0.45, verbose=False)
+                raw_dets, _ = self.qnn_yolo.detect(img, conf_thresh=0.42, iou_thresh=0.45)
+            except Exception:
+                raw_dets = []
+        elif self.yolo_model is not None:
+            try:
+                yolo_results = self.yolo_model(img, conf=0.42, verbose=False)
                 if yolo_results and len(yolo_results) > 0:
-
                     r = yolo_results[0]
                     for box in r.boxes:
                         cid = int(box.cls[0].item())
-                        c_name = r.names.get(cid, "object").lower()
+                        c_name = r.names.get(cid, "object")
                         score = float(box.conf[0].item())
-
-                        # Filter out suppressed room furniture/appliance/light/pet hallucinations
-                        if c_name in self.suppressed_classes:
-                            continue
-
-                        # If face already detected, skip broad person bounding box
-                        if c_name == 'person':
-                            has_human_presence = True
-                            if face_boxes:
-                                continue
-
                         xyxy = box.xyxy[0].tolist()
                         bx = int(max(0, xyxy[0]))
                         by = int(max(0, xyxy[1]))
                         bw = int(max(1, xyxy[2] - xyxy[0]))
                         bh = int(max(1, xyxy[3] - xyxy[1]))
-
-                        # Reject any box that covers > 70% of width or height (never full-screen)
-                        if bw >= w * 0.70 or bh >= h * 0.70:
-                            continue
-
-                        # Map remote/cell phone to Smartphone, mouse to Tech Accessory / Earbuds Case
-                        label = c_name.title()
-                        cat = "detected_object"
-                        if c_name in ['cell phone', 'remote']:
-                            label = "Smartphone / Mobile Device"
-                            cat = "electronics"
-                        elif c_name == 'mouse':
-                            label = "Tech Accessory / Earbuds Case"
-                            cat = "electronics"
-                        elif c_name in ['laptop', 'keyboard', 'tv']:
-                            cat = "electronics"
-                        elif c_name in ['bottle', 'cup', 'wine glass']:
-                            cat = "drinkware"
-                        elif c_name in ['book']:
-                            cat = "reading_material"
-                        elif c_name in ['scissors']:
-                            label = "Precision Tool / Hardware Tool"
-                            cat = "tool"
-                        elif c_name in ['potted plant', 'banana', 'apple']:
-                            cat = "plant" if c_name == 'potted plant' else "food"
-
-                        dialogue = f"Detected {label.lower()}."
-                        objects.append(DetectedObject(
-                            label=label,
-                            confidence=round(score, 2),
-                            category=cat,
-                            bbox=[bx, by, bw, bh],
-                            details={"model": "Ultralytics YOLOv8", "class_id": cid},
-                            interactive_dialogue=dialogue,
-                            suggested_interactions=[f"Ask Nori about {label}", "Diagram on Canvas"]
-                        ))
+                        raw_dets.append({
+                            "class_id": cid,
+                            "label": c_name,
+                            "confidence": score,
+                            "bbox": [bx, by, bw, bh],
+                            "backend": "PyTorch_CPU",
+                            "device": "Host CPU"
+                        })
             except Exception:
+                raw_dets = []
+
+        # Process each detected bounding box dynamically
+        for d in raw_dets:
+            c_name = d["label"].lower()
+            if c_name in self.suppressed_classes:
+                continue
+            if c_name == 'person':
+                has_human_presence = True
+                if face_boxes:
+                    continue
+
+            bx, by, bw, bh = d["bbox"]
+            # Only ignore boxes that cover virtually 100% of the screen
+            if bw >= w * 0.98 and bh >= h * 0.98:
+                continue
+
+            crop = img[by:by+bh, bx:bx+bw]
+
+            # 2.1 Dynamic PCB & Microcontroller Verification on small workbench crops only
+            pcb_info = None
+            if bw < 320 and bh < 320 and c_name not in ['laptop', 'keyboard', 'potted plant', 'cup', 'bottle']:
+                pcb_info = electronics_engine.inspect_pcb_region(crop)
+
+            if pcb_info:
+                label = pcb_info["type"]
+                cat = "microcontroller"
+                score = pcb_info["confidence"]
+                dialogue = f"Detected {label}. Ready for circuit connections, project ideas, and firmware."
+                interactions = [
+                    "Build Project with Workspace Components",
+                    "Arduino Pinout Guide",
+                    "Draw Circuit Schematic on Canvas",
+                    "Generate Arduino Code"
+                ]
+                objects.append(DetectedObject(
+                    label=label,
+                    confidence=round(score, 2),
+                    category=cat,
+                    bbox=[bx, by, bw, bh],
+                    details=pcb_info,
+                    interactive_dialogue=dialogue,
+                    suggested_interactions=interactions
+                ))
+                continue
+
+            # 2.2 Refine ambiguous appliance / fixture classes
+            if c_name == 'toilet':
+                c_name = 'room fixture / appliance'
+            elif c_name in ['refrigerator', 'microwave', 'oven', 'toaster', 'sink']:
                 pass
 
-        # -----------------------------------------------------------------
-        # 3. HANDHELD FOREGROUND OBJECT, EARPHONES & COMPONENT DETECTOR
-        # -----------------------------------------------------------------
-        handheld_obj = self._detect_handheld_foreground_object(img, face_boxes)
-        if handheld_obj:
-            objects.append(handheld_obj)
+            # Preserve authentic neural model label dynamically (NO hardcoding)
+            label = c_name.title()
+            if c_name in ['laptop', 'keyboard', 'mouse', 'cell phone', 'tv', 'remote']:
+                cat = "electronics"
+                dialogue = f"Detected {label.lower()} in your workspace."
+                interactions = [f"Inspect {label}", "Focus Tracking", "Desktop Automation"]
+            elif c_name in ['refrigerator', 'microwave', 'oven', 'toaster', 'sink', 'room fixture / appliance']:
+                cat = "appliance"
+                dialogue = f"Observing {label.lower()} in your room."
+                interactions = ["Inspect Appliance", "Canvas Diagram", "Device Automation"]
+            elif c_name in [
+                'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza',
+                'donut', 'cake', 'bowl', 'cup', 'bottle', 'wine glass', 'fork', 'knife', 'spoon'
+            ]:
+                cat = "cooking_and_dining"
+                dialogue = f"Observing {label.lower()}. Ready for recipe ideas, cooking steps, and nutrition."
+                interactions = ["Suggest Recipe", "Nutritional Breakdown", "Cooking Timer", "Meal Prep"]
+            elif c_name in ['chair', 'couch', 'bed', 'dining table']:
+                cat = "furniture"
+                dialogue = f"Detected {label.lower()} in your workspace."
+                interactions = ["Workspace Ergonomics", "Canvas Layout"]
+            elif c_name in ['sports ball', 'baseball bat', 'tennis racket', 'skateboard', 'surfboard']:
+                cat = "sports_and_fitness"
+                dialogue = f"Observing {label.lower()} for activity and fitness."
+                interactions = ["Workout Plan", "Activity Tracking", "Stretch Routine"]
+            elif c_name in ['book', 'scissors', 'clock', 'vase', 'potted plant']:
+                cat = "workbench_item"
+                dialogue = f"Observing {label.lower()} on desk."
+                interactions = [f"Inspect {label}", "Canvas Diagram"]
+            else:
+                cat = "object"
+                dialogue = f"Observing {label.lower()}."
+                interactions = [f"Inspect {label}", "Workspace Focus"]
+
+            objects.append(DetectedObject(
+                label=label,
+                confidence=round(d["confidence"], 2),
+                category=cat,
+                bbox=[bx, by, bw, bh],
+                details={"model": "YOLOv8 QNN Static", "class_id": d.get("class_id", 0)},
+                interactive_dialogue=dialogue,
+                suggested_interactions=interactions
+            ))
+
 
         return objects
 
-    def _detect_handheld_foreground_object(self, img: np.ndarray, face_boxes: List[List[int]]) -> Optional[DetectedObject]:
-        """
-        Detects handheld objects, earphones/headphones, cables, components, or tools held up to the camera.
-        Identifies wire loops, audio accessories, and dominant color profiles.
-        """
-        try:
-            h, w = img.shape[:2]
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            
-            # Mask out faces so face doesn't interfere
-            mask = np.ones((h, w), dtype=np.uint8) * 255
-            for (fx, fy, fw, fh) in face_boxes:
-                pad_y = int(fh * 0.35)
-                pad_x = int(fw * 0.25)
-                mask[max(0, fy - pad_y):min(h, fy + fh + pad_y), max(0, fx - pad_x):min(w, fx + fw + pad_x)] = 0
-            
-            roi_mask = np.zeros((h, w), dtype=np.uint8)
-            roi_mask[int(h * 0.05):int(h * 0.95), int(w * 0.05):int(w * 0.95)] = 255
-            combined_mask = cv2.bitwise_and(mask, roi_mask)
 
-            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            edges = cv2.Canny(blurred, 35, 120)
-            edges = cv2.bitwise_and(edges, combined_mask)
 
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            best_bbox = None
-            best_area = 0
-            is_wire_like = False
-            
-            for cnt in contours:
-                area = cv2.contourArea(cnt)
-                x, y, bw, bh = cv2.boundingRect(cnt)
-                
-                # Filter noise and huge full-screen blobs
-                if (bw > 25 and bh > 25) and (bw < w * 0.75 and bh < h * 0.85):
-                    # Check overlap with face boxes
-                    overlap = False
-                    for (fx, fy, fw, fh) in face_boxes:
-                        if not (x + bw < fx or x > fx + fw or y + bh < fy or y > fy + fh):
-                            overlap = True
-                            break
-                    if overlap:
-                        continue
-
-                    # Check for wire/earphone loop signatures (high perimeter-to-area ratio or multi-curved loops)
-                    perimeter = cv2.arcLength(cnt, True)
-                    circularity = 4 * math.pi * (area / (perimeter * perimeter)) if perimeter > 0 else 0
-                    
-                    # Earphones/cables typically have high aspect ratios or thin looping contours
-                    if (perimeter > 120 and (area < 8000 or circularity < 0.15)) or (bh > h * 0.25 and bw > w * 0.15):
-                        is_wire_like = True
-                        if area > best_area or best_bbox is None:
-                            best_area = area
-                            best_bbox = [x, y, bw, bh]
-                    elif area > 1000 and area > best_area:
-                        best_area = area
-                        best_bbox = [x, y, bw, bh]
-
-            if best_bbox:
-                bx, by, bw, bh = best_bbox
-                crop = img[by:by+bh, bx:bx+bw]
-                
-                if crop.size > 0:
-                    avg_bgr = cv2.mean(crop)[:3]
-                    b, g, r = avg_bgr
-
-                    # If thin looping contours or dark cable structures detected:
-                    if is_wire_like or (r < 90 and g < 90 and b < 90 and bh > 60):
-                        label = "Earphones / Audio Cable"
-                        cat = "audio_accessory"
-                        dialogue = "I see your earphones / audio cable held up in front of the camera."
-                        interactions = ["Play Audio", "Microphone Settings", "Hardware Wiring Guide"]
-                    elif r > 110 and g > 90 and b < 80:
-                        label = "Handheld Item (Gold & Dark Object)"
-                        cat = "handheld_object"
-                        dialogue = "I see an item held up in front of the camera."
-                        interactions = ["Inspect Item", "Canvas Diagram"]
-                    elif r > 130 and g < 90 and b < 90:
-                        label = "Handheld Item (Colored Component)"
-                        cat = "handheld_object"
-                        dialogue = "I see a component held up in front of the camera."
-                        interactions = ["Inspect Component", "Circuit Analysis"]
-                    else:
-                        label = "Handheld Object / Component"
-                        cat = "handheld_object"
-                        dialogue = "I see an object held up in front of the camera."
-                        interactions = ["Inspect Object", "Canvas Diagram"]
-
-                    return DetectedObject(
-                        label=label,
-                        confidence=0.94,
-                        category=cat,
-                        bbox=[bx, by, bw, bh],
-                        details={"type": label, "area": int(best_area)},
-                        interactive_dialogue=dialogue,
-                        suggested_interactions=interactions
-                    )
-        except Exception:
-            pass
-        return None
 
     def process_frame(
         self,

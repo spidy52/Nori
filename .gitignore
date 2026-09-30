@@ -1,0 +1,91 @@
+# Git Ignore for Nori
+
+
+# Python Virtual Environments & Cache
+venv/
+.venv/
+env/
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*/*/*/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+electron/node_modules/
+
+# Model Weights & Large Binary Files
+*.pt
+*.onnx
+*.bin
+*.safetensors
+weights/
+backend/models/
+models/
+.cache/
+hf_cache/
+
+# Build & Dist Outputs
+dist/
+frontend/dist/
+electron/dist/
+build/
+
+# Logs & Temporary Files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.temp
+
+# Markdown & Documentation (Ignore all except README.md)
+*.md
+!README.md
+!**/README.md
+
+# Temporary images
+phone_crop.jpg
+
+# Batch scripts
+*.bat
+
+# Package Lockfiles
+package-lock.json
+*/package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Generated Documents & Utilities
+generate_pdf.py
+generate_pitch_deck.py
+generate_pptx.py
+Nori_Brief_Project_Description.pdf
+Nori_Pitch_Presentation.pdf
+Nori_Pitch_Presentation.pptx
+*.pdf
+*.pptx
+
+# OS Specific
+.DS_Store
+Thumbs.db
+*.bak
+
+# Testing & Benchmark Scratch Scripts
+benchmark.py
+hardware_check.py
+validate_accuracy.py
+tests/
+
+
+
+

@@ -89,8 +89,58 @@ export const CameraGuidanceView: React.FC = () => {
   const [userFocusState, setUserFocusState] = useState<string>('Active Screen Engagement');
   const [wiringAnalysis, setWiringAnalysis] = useState<string | null>(null);
   const [desktopNotice, setDesktopNotice] = useState<string | null>(null);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [isBuildingProject, setIsBuildingProject] = useState<boolean>(false);
+  const [isFullView, setIsFullView] = useState<boolean>(false);
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>('cover');
 
-  // 1. Initialize native 60 FPS hardware-accelerated video stream with resilient fallback
+  // Enumerate video devices on mount and when USB devices change
+  const probeCameras = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setAvailableCameras(videoInputs);
+        if (videoInputs.length > 0) {
+          setSelectedCameraId(prev => {
+            if (prev && videoInputs.some(v => v.deviceId === prev)) return prev;
+            // Prefer USB / External camera if connected
+            const usbCam = videoInputs.find(c => (c.label || '').toLowerCase().includes('usb') || (c.label || '').toLowerCase().includes('external'));
+            return usbCam ? usbCam.deviceId : videoInputs[0].deviceId;
+          });
+        }
+      } catch (e) {
+        console.warn('Camera enumeration fallback:', e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    probeCameras();
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener('devicechange', probeCameras);
+      return () => navigator.mediaDevices.removeEventListener('devicechange', probeCameras);
+    }
+  }, [probeCameras]);
+
+  // Quick 1-click camera switcher between Laptop Webcam and USB Camera
+  const toggleCameraSource = async () => {
+    if (availableCameras.length < 2) return;
+    const currentIdx = availableCameras.findIndex(c => c.deviceId === selectedCameraId);
+    const nextIdx = (currentIdx + 1) % availableCameras.length;
+    const nextCam = availableCameras[nextIdx];
+    setSelectedCameraId(nextCam.deviceId);
+    try {
+      await fetch('http://127.0.0.1:8000/api/physical/select_camera', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_id: nextIdx })
+      });
+    } catch {}
+  };
+
+  // 1. Initialize native 60 FPS hardware-accelerated video stream with multi-camera selection
   useEffect(() => {
     let stream: MediaStream | null = null;
     let isMounted = true;
@@ -99,13 +149,12 @@ export const CameraGuidanceView: React.FC = () => {
       if (typeof navigator === 'undefined' || !('mediaDevices' in navigator)) return;
       try {
         let s: MediaStream;
+        const videoConstraints: MediaTrackConstraints = selectedCameraId
+          ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 } };
+
         try {
-          s = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 }
-            }
-          });
+          s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
         } catch {
           s = await navigator.mediaDevices.getUserMedia({ video: true });
         }
@@ -121,6 +170,8 @@ export const CameraGuidanceView: React.FC = () => {
         }
         setHasBrowserStream(true);
         setStreamActive(true);
+        // Refresh camera labels after user permission unlocks them
+        probeCameras();
       } catch (err) {
         console.warn('getUserMedia webcam access fallback:', err);
         if (isMounted) {
@@ -138,7 +189,7 @@ export const CameraGuidanceView: React.FC = () => {
         stream.getTracks().forEach((t) => t.stop());
       }
     };
-  }, []);
+  }, [selectedCameraId, probeCameras]);
 
   // 2. 60 FPS Continuous Linear Interpolation (Lerp) Animation Loop
   useEffect(() => {
@@ -173,12 +224,25 @@ export const CameraGuidanceView: React.FC = () => {
           let offsetX = 0;
           let offsetY = 0;
 
-          if (containerRatio > videoRatio) {
-            renderW = currentCanvas.height * videoRatio;
-            offsetX = (currentCanvas.width - renderW) / 2;
+          if (fitMode === 'cover') {
+            if (containerRatio > videoRatio) {
+              renderW = currentCanvas.width;
+              renderH = currentCanvas.width / videoRatio;
+              offsetY = (currentCanvas.height - renderH) / 2;
+            } else {
+              renderH = currentCanvas.height;
+              renderW = currentCanvas.height * videoRatio;
+              offsetX = (currentCanvas.width - renderW) / 2;
+            }
           } else {
-            renderH = currentCanvas.width / videoRatio;
-            offsetY = (currentCanvas.height - renderH) / 2;
+            // contain
+            if (containerRatio > videoRatio) {
+              renderW = currentCanvas.height * videoRatio;
+              offsetX = (currentCanvas.width - renderW) / 2;
+            } else {
+              renderH = currentCanvas.width / videoRatio;
+              offsetY = (currentCanvas.height - renderH) / 2;
+            }
           }
 
           const scaleX = renderW / (frameW || 640);
@@ -188,7 +252,7 @@ export const CameraGuidanceView: React.FC = () => {
           const seenIds = new Set<string>();
 
           // Process current detection targets
-          objs.forEach((obj, idx) => {
+          objs.forEach((obj) => {
             if (!obj.bbox || obj.bbox.length < 4) return;
             if (obj.category === 'user_focus') return;
 
@@ -198,21 +262,27 @@ export const CameraGuidanceView: React.FC = () => {
             const targetW = bw * scaleX;
             const targetH = bh * scaleY;
 
-            // Stable object key based on label
+            // Stable object key based on category and label
             const objKey = `${obj.category}_${obj.label}`;
             seenIds.add(objKey);
 
             let hue = 38;
             if (obj.category === 'human' || obj.category === 'human_mood') {
               hue = 188; // Neon Cyan for face / user
-            } else if (obj.category === 'electronics' || obj.category === 'handheld_gadget' || obj.category === 'personal_device') {
-              hue = 280; // Neon Purple / Magenta for handheld gadget / phone / earbuds case
+            } else if (obj.category === 'cooking_and_dining') {
+              hue = 24; // Warm Coral / Tangerine for culinary & dining items
+            } else if (obj.category === 'appliance') {
+              hue = 170; // Cyan / Mint for room appliances
+            } else if (obj.category === 'microcontroller' || obj.label.toLowerCase().includes('arduino')) {
+              hue = 210; // Electric Royal Blue for Arduino / Microcontroller
+            } else if (obj.category === 'electronics' || obj.category === 'handheld_gadget') {
+              hue = 280; // Neon Purple / Magenta for electronics / phone / gadget
             } else if (obj.category === 'personal_accessory') {
               hue = 32; // Warm Amber / Gold for eyewear / spectacles
             } else if (obj.category === 'tool' || obj.category === 'hardware') {
               hue = 45; // Amber / Gold for tools
             } else if (obj.category === 'drinkware') {
-              hue = 210; // Blue for drinkware
+              hue = 200; // Sky Blue for drinkware / cup
             } else if (obj.category === 'reading_material') {
               hue = 150; // Emerald for reading material
             } else {
@@ -238,13 +308,13 @@ export const CameraGuidanceView: React.FC = () => {
                 targetY,
                 targetW,
                 targetH,
-                alpha: 0.15,
+                alpha: 0.35,
                 targetAlpha: 1.0,
                 hue,
                 missingFrames: 0
               });
             } else {
-              // Update target coords
+              // Update target coords immediately
               const b = tracked.get(objKey)!;
               b.targetX = targetX;
               b.targetY = targetY;
@@ -256,28 +326,26 @@ export const CameraGuidanceView: React.FC = () => {
             }
           });
 
-          // Mark missing boxes to fade out with persistence buffer for fast movements
+          // Mark missing boxes to fade out INSTANTLY when camera shifts
           tracked.forEach((box, key) => {
             if (!seenIds.has(key)) {
               box.missingFrames += 1;
-              // Generous grace period: don't start fading immediately if phone moves quickly or blurs
-              if (box.missingFrames > 25) {
-                box.targetAlpha = 0.0;
-              }
+              box.targetAlpha = 0.0;
+              box.alpha *= 0.65; // Quick snappy decay (< 100ms)
             }
 
-            // Adaptive Lerp Speed: if object moved fast (large distance), accelerate tracking
+            // Snappy Real-Time Lerp Speed
             const dist = Math.hypot(box.targetX - box.currX, box.targetY - box.currY);
-            const lerpSpeed = dist > 80 ? 0.60 : dist > 30 ? 0.45 : 0.32;
+            const lerpSpeed = dist > 80 ? 0.88 : dist > 30 ? 0.78 : 0.65;
 
             box.currX += (box.targetX - box.currX) * lerpSpeed;
             box.currY += (box.targetY - box.currY) * lerpSpeed;
             box.currW += (box.targetW - box.currW) * lerpSpeed;
             box.currH += (box.targetH - box.currH) * lerpSpeed;
-            box.alpha += (box.targetAlpha - box.alpha) * 0.20;
+            box.alpha += (box.targetAlpha - box.alpha) * 0.45;
 
-            // Remove dead boxes only after sustained absence (>35 frames / ~600ms)
-            if (box.alpha < 0.04 && box.missingFrames > 35) {
+            // Remove box immediately if gone
+            if (box.alpha < 0.06 || box.missingFrames > 3) {
               tracked.delete(key);
               return;
             }
@@ -413,55 +481,60 @@ export const CameraGuidanceView: React.FC = () => {
   }, []);
 
   // 4. Continuous Autonomous Perception Loop (300ms for fast responsive updates)
+  // 4. Low-Latency Continuous Autonomous Perception Loop
   useEffect(() => {
     if (!isRecording || isPaused) return;
+    let active = true;
 
-    const interval = setInterval(async () => {
-      if (isAnalyzingRef.current) return;
-      if (!videoRef.current || videoRef.current.videoWidth === 0) return;
+    const captureAndAnalyze = async () => {
+      if (!active) return;
+      if (videoRef.current && videoRef.current.videoWidth > 0 && !isAnalyzingRef.current) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+        try {
+          isAnalyzingRef.current = true;
+          const video = videoRef.current;
+          const offscreen = document.createElement('canvas');
 
-      try {
-        isAnalyzingRef.current = true;
-        const video = videoRef.current;
-        const offscreen = document.createElement('canvas');
+          const vidW = video.videoWidth || 640;
+          const vidH = video.videoHeight || 480;
+          const targetW = 640;
+          const targetH = Math.max(240, Math.round((vidH / vidW) * targetW));
 
-        // Maintain exact aspect ratio to prevent distorted bounding boxes
-        const vidW = video.videoWidth || 640;
-        const vidH = video.videoHeight || 480;
-        const targetW = 640;
-        const targetH = Math.max(240, Math.round((vidH / vidW) * targetW));
+          offscreen.width = targetW;
+          offscreen.height = targetH;
+          const ctx = offscreen.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+            const imageBase64 = offscreen.toDataURL('image/jpeg', 0.80).split(',')[1];
 
-        offscreen.width = targetW;
-        offscreen.height = targetH;
-        const ctx = offscreen.getContext('2d');
-        if (!ctx) return;
+            const res = await fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image_base64: imageBase64, project_context: 'Workspace Perception' }),
+              signal: controller.signal
+            });
 
-        ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-        const imageBase64 = offscreen.toDataURL('image/jpeg', 0.82).split(',')[1];
-
-        const res = await fetch('http://127.0.0.1:8000/api/physical/analyze_frame', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_base64: imageBase64, project_context: 'Workspace Perception' }),
-          signal: controller.signal
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          handleAnalysisData(data, offscreen.width, offscreen.height);
+            if (res.ok) {
+              const data = await res.json();
+              handleAnalysisData(data, offscreen.width, offscreen.height);
+            }
+          }
+        } catch {
+        } finally {
+          clearTimeout(timeoutId);
+          isAnalyzingRef.current = false;
         }
-      } catch (e) {
-        // Quiet on network timeout or abort
-      } finally {
-        clearTimeout(timeoutId);
-        isAnalyzingRef.current = false;
       }
-    }, 220);
 
-    return () => clearInterval(interval);
+      if (active) {
+        setTimeout(captureAndAnalyze, 80);
+      }
+    };
+
+    captureAndAnalyze();
+    return () => { active = false; };
   }, [isRecording, isPaused, handleAnalysisData]);
 
   // 5. Initial status sync on load
@@ -559,6 +632,88 @@ export const CameraGuidanceView: React.FC = () => {
     setTimeout(() => setDesktopNotice(null), 5000);
   };
 
+  const extractComponentCrops = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return {};
+
+    const crops: Record<string, { label: string; dataUrl: string; width: number; height: number }> = {};
+    try {
+      const fullCanvas = document.createElement('canvas');
+      fullCanvas.width = video.videoWidth;
+      fullCanvas.height = video.videoHeight;
+      const fCtx = fullCanvas.getContext('2d');
+      if (!fCtx) return {};
+
+      fCtx.drawImage(video, 0, 0, fullCanvas.width, fullCanvas.height);
+
+      const { objs } = rawDetectionsRef.current;
+      objs.forEach((obj, idx) => {
+        if (obj.bbox && obj.bbox.length === 4) {
+          const [bx, by, bw, bh] = obj.bbox;
+          if (bw > 25 && bh > 25) {
+            const padX = Math.round(bw * 0.12);
+            const padY = Math.round(bh * 0.12);
+            const sx = Math.max(0, bx - padX);
+            const sy = Math.max(0, by - padY);
+            const sw = Math.min(fullCanvas.width - sx, bw + padX * 2);
+            const sh = Math.min(fullCanvas.height - sy, bh + padY * 2);
+
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = sw;
+            cropCanvas.height = sh;
+            const cCtx = cropCanvas.getContext('2d');
+            if (cCtx) {
+              cCtx.drawImage(fullCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+              const key = obj.label || `component_${idx}`;
+              crops[key] = {
+                label: obj.label,
+                dataUrl: cropCanvas.toDataURL('image/jpeg', 0.88),
+                width: sw,
+                height: sh
+              };
+            }
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('Component crop extraction fallback:', e);
+    }
+    return crops;
+  };
+
+  const handleBuildWorkspaceProject = async () => {
+    setIsBuildingProject(true);
+    voiceEngine.speak("Analyzing all components on your workspace to design a complete hardware project.");
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/physical/build_project', {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const blueprint = await res.json();
+        const componentsUsed = blueprint.detected_components_used?.join(', ') || 'workspace components';
+        const msg = `Designed ${blueprint.title} using your ${componentsUsed}. Drawing complete wiring schematic and C++ code on Studio Canvas.`;
+        voiceEngine.speak(msg);
+        const crops = extractComponentCrops();
+        setActiveView('canvas');
+        setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent('nori-auto-draw', {
+              detail: {
+                prompt: `Hardware Architecture for ${blueprint.title} (${componentsUsed})`,
+                blueprint: blueprint,
+                componentCrops: crops
+              }
+            })
+          );
+        }, 350);
+      }
+    } catch (e) {
+      console.error('Failed to build project:', e);
+    } finally {
+      setIsBuildingProject(false);
+    }
+  };
+
   return (
     <div className="w-full h-full flex flex-col bg-[#07090e] text-slate-100 select-none font-sans overflow-hidden">
       {/* 1. Top Header */}
@@ -583,6 +738,82 @@ export const CameraGuidanceView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Multi-Camera Source Selector */}
+          {availableCameras.length > 0 && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#121626] border border-white/10 text-xs">
+              <Camera className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <select
+                value={selectedCameraId}
+                onChange={async (e) => {
+                  const devId = e.target.value;
+                  setSelectedCameraId(devId);
+                  const idx = availableCameras.findIndex(c => c.deviceId === devId);
+                  if (idx !== -1) {
+                    try {
+                      await fetch('http://127.0.0.1:8000/api/physical/select_camera', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ camera_id: idx })
+                      });
+                    } catch {}
+                  }
+                }}
+                className="bg-transparent text-slate-200 text-xs font-mono border-none outline-none cursor-pointer max-w-[140px] truncate"
+              >
+                {availableCameras.map((cam, idx) => (
+                  <option key={cam.deviceId || idx} value={cam.deviceId} className="bg-[#0c0f18] text-white">
+                    {cam.label || `Camera ${idx + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* 1-Click Quick Camera Switcher */}
+          {availableCameras.length > 1 && (
+            <button
+              onClick={toggleCameraSource}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-cyan-950/80 hover:bg-cyan-900/90 border border-cyan-500/40 text-cyan-200 text-xs font-mono shadow-md cursor-pointer transition-all"
+              title="Click to switch between Laptop Webcam and USB Camera"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+              <span>
+                {availableCameras.find(c => c.deviceId === selectedCameraId)?.label?.replace(/\s*\([^)]*\)/g, '').slice(0, 16) || 'Switch Camera'}
+              </span>
+            </button>
+          )}
+
+          {/* Full-View & Fit Toggles */}
+          <div className="flex items-center gap-1 bg-[#121626] p-0.5 rounded-md border border-white/10">
+            <button
+              onClick={() => setFitMode(fitMode === 'cover' ? 'contain' : 'cover')}
+              className={`px-2 py-1 rounded text-[11px] font-mono transition-all cursor-pointer ${
+                fitMode === 'cover' ? 'bg-orange-500 text-white font-bold' : 'text-slate-400 hover:text-white'
+              }`}
+              title="Fill screen (cover, no black bars) vs Fit frame (contain)"
+            >
+              {fitMode === 'cover' ? 'Fill View' : 'Fit Frame'}
+            </button>
+            <button
+              onClick={() => setIsFullView(!isFullView)}
+              className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-all cursor-pointer"
+              title={isFullView ? 'Exit Full View' : 'Full Screen View (Hide Sidebar)'}
+            >
+              {isFullView ? <Minimize2 className="w-3.5 h-3.5 text-orange-400" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
+          {/* Autonomous Project Builder Action */}
+          <button
+            onClick={handleBuildWorkspaceProject}
+            disabled={isBuildingProject}
+            className="px-3 py-1.5 rounded-md bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-orange-500/20 cursor-pointer transition-all"
+            title="Synthesize Project & Auto-Draw on Studio Canvas using detected items"
+          >
+            <Cpu className={`w-3.5 h-3.5 ${isBuildingProject ? 'animate-spin' : ''}`} />
+            <span>{isBuildingProject ? 'Designing...' : '⚡ Build Project'}</span>
+          </button>
+
           {/* Dynamic Activity Badge */}
           <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-md bg-[#121626] border border-orange-500/30 text-xs">
             <Activity className="w-3.5 h-3.5 text-orange-400" />
@@ -604,8 +835,12 @@ export const CameraGuidanceView: React.FC = () => {
       {/* 2. Main Viewport */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Dominant Camera Viewport */}
-        <div className="flex-1 bg-[#05070c] flex flex-col justify-between p-6 overflow-hidden">
-          <div className="relative flex-1 rounded-lg bg-[#090b12] border border-white/[0.08] overflow-hidden flex items-center justify-center shadow-2xl">
+        <div className={`flex-1 bg-[#05070c] flex flex-col justify-between overflow-hidden transition-all ${
+          isFullView ? 'p-0' : 'p-3 sm:p-5'
+        }`}>
+          <div className={`relative flex-1 bg-[#090b12] overflow-hidden flex items-center justify-center shadow-2xl transition-all ${
+            isFullView ? 'rounded-none border-none' : 'rounded-lg border border-white/[0.08]'
+          }`}>
             {isRecording ? (
               <div className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden">
                 {/* 1. Native Zero-Latency 60 FPS HTML5 Video (Dominant & Primary) */}
@@ -614,7 +849,7 @@ export const CameraGuidanceView: React.FC = () => {
                   autoPlay
                   playsInline
                   muted
-                  className={`w-full h-full object-contain ${hasBrowserStream ? 'block' : 'hidden'}`}
+                  className={`w-full h-full ${fitMode === 'cover' ? 'object-cover' : 'object-contain'} ${hasBrowserStream ? 'block' : 'hidden'}`}
                 />
 
                 {/* 2. Fallback OpenCV DirectML Stream if browser camera unavailable */}
@@ -622,7 +857,7 @@ export const CameraGuidanceView: React.FC = () => {
                   <img
                     src="http://127.0.0.1:8000/api/physical/video_feed"
                     alt="DirectML Hardware Stream"
-                    className="w-full h-full object-contain"
+                    className={`w-full h-full ${fitMode === 'cover' ? 'object-cover' : 'object-contain'}`}
                   />
                 )}
 
@@ -637,14 +872,35 @@ export const CameraGuidanceView: React.FC = () => {
                   <span className="w-2 h-2 rounded-sm bg-emerald-400 animate-pulse" />
                   <span className="text-white font-bold">SMOOTH 60 FPS HUD</span>
                   <span className="text-slate-500">|</span>
-                  <span className="text-orange-400 font-semibold">Continuous Lerp Tracking</span>
+                  <span className="text-orange-400 font-semibold">Continuous Tracking</span>
                 </div>
 
-                {/* Top-Right Activity HUD Badge */}
-                <div className="absolute top-4 right-4 hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/80 backdrop-blur-md border border-orange-500/30 text-xs font-mono shadow-lg">
-                  <Activity className="w-3.5 h-3.5 text-orange-400 animate-pulse" />
-                  <span className="text-slate-300">Activity:</span>
-                  <span className="text-orange-300 font-bold">{activityInfo.title}</span>
+                {/* Top-Right Quick Controls Overlay */}
+                <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
+                  {availableCameras.length > 1 && (
+                    <button
+                      onClick={toggleCameraSource}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-cyan-950/85 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-200 text-xs font-mono shadow-lg backdrop-blur-md cursor-pointer transition-all"
+                      title="Switch between Laptop Webcam and USB Camera"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Switch Camera</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setFitMode(fitMode === 'cover' ? 'contain' : 'cover')}
+                    className="px-2.5 py-1.5 rounded-md bg-black/80 hover:bg-white/10 border border-white/15 text-slate-200 text-xs font-mono shadow-lg backdrop-blur-md cursor-pointer transition-all"
+                    title="Toggle Fill (no black bars) vs Fit Frame"
+                  >
+                    {fitMode === 'cover' ? 'Fill (No Bars)' : 'Fit Frame'}
+                  </button>
+                  <button
+                    onClick={() => setIsFullView(!isFullView)}
+                    className="p-1.5 rounded-md bg-black/80 hover:bg-white/10 border border-white/15 text-slate-200 text-xs shadow-lg backdrop-blur-md cursor-pointer transition-all"
+                    title={isFullView ? 'Exit Full View' : 'Full View (Edge-to-Edge)'}
+                  >
+                    {isFullView ? <Minimize2 className="w-4 h-4 text-orange-400" /> : <Maximize2 className="w-4 h-4 text-slate-200" />}
+                  </button>
                 </div>
 
                 {/* Desktop Notice Banner */}
@@ -709,8 +965,10 @@ export const CameraGuidanceView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Analysis Panel (380px) */}
-        <div className="w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-white/[0.08] bg-[#0c0f18] p-6 space-y-6 overflow-y-auto shrink-0">
+        {/* Right Analysis Panel (380px) - Hidden in Full View */}
+        <div className={`w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-white/[0.08] bg-[#0c0f18] p-6 space-y-6 overflow-y-auto shrink-0 transition-all ${
+          isFullView ? 'hidden' : 'block'
+        }`}>
           {/* 1. Dynamic Activity & Context */}
           <div className="p-4 rounded-md bg-[#121626] border border-orange-500/30 space-y-3">
             <div className="flex items-center justify-between">
@@ -848,6 +1106,7 @@ export const CameraGuidanceView: React.FC = () => {
                   const detectedLabels = detections.map(d => d.label).join(', ') || 'Workspace Inspection Setup';
                   const prompt = `Workspace Fix & Diagram: ${detectedLabels} — ${diagText}`;
                   
+                  const crops = extractComponentCrops();
                   setActiveView('canvas');
                   setTimeout(() => {
                     window.dispatchEvent(
@@ -855,7 +1114,8 @@ export const CameraGuidanceView: React.FC = () => {
                         detail: {
                           prompt,
                           detections,
-                          wiringAnalysis: diagText
+                          wiringAnalysis: diagText,
+                          componentCrops: crops
                         }
                       })
                     );

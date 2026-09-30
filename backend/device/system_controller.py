@@ -437,6 +437,12 @@ class SystemController:
         if not app_target:
             return {"executed": False, "domain": "launch", "message": "No application specified."}
 
+        # Check if this is a calculation or math question rather than an app launch
+        math_words = ["plus", "minus", "times", "multiplied", "divided", "over", "percent", "drain", "+", "-", "*", "/", "?"]
+        target_lower = app_target.lower().strip()
+        if target_lower not in ["calculator", "calc"] and any(w in target_lower for w in math_words):
+            return {"executed": False, "domain": "launch", "message": "Query appears to be a mathematical calculation, not an application launch."}
+
         # Common Windows protocol / executable / URL aliases
         alias_map = {
             "calculator": "calc.exe",
@@ -461,40 +467,47 @@ class SystemController:
             "google": "https://www.google.com"
         }
 
-        exe_or_uri = alias_map.get(app_target.lower(), app_target)
+        exe_or_uri = alias_map.get(target_lower, None)
 
         try:
-            if exe_or_uri.startswith("http://") or exe_or_uri.startswith("https://"):
-                import webbrowser
-                webbrowser.open(exe_or_uri)
-            elif exe_or_uri.endswith(":") or exe_or_uri.endswith(".exe"):
-                subprocess.Popen(["start", exe_or_uri], shell=True)
-            else:
-                subprocess.Popen([exe_or_uri], shell=True)
+            if exe_or_uri:
+                if exe_or_uri.startswith("http://") or exe_or_uri.startswith("https://"):
+                    import webbrowser
+                    webbrowser.open(exe_or_uri)
+                elif exe_or_uri.endswith(":") or exe_or_uri.endswith(".exe"):
+                    subprocess.Popen(["start", exe_or_uri], shell=True)
+                else:
+                    subprocess.Popen([exe_or_uri], shell=True)
 
-            return {
-                "executed": True,
-                "domain": "launch",
-                "action": f"launch_{app_target}",
-                "headline": f"Opening '{app_target.title()}' for you now.",
-                "details": f"Subprocess spawned application: '{exe_or_uri}'."
-            }
-        except Exception as e:
-            # Fallback to start command via shell
-            try:
-                subprocess.Popen(["start", app_target], shell=True)
                 return {
                     "executed": True,
                     "domain": "launch",
                     "action": f"launch_{app_target}",
-                    "headline": f"Opening '{app_target.title()}' now.",
-                    "details": f"Executed shell start '{app_target}'."
+                    "headline": f"Opening '{app_target.title()}' for you now.",
+                    "details": f"Subprocess spawned application: '{exe_or_uri}'."
                 }
-            except Exception as ex:
+            else:
+                # Only attempt to launch if it is a single valid token without spaces or special symbols
+                safe_app = re.sub(r'[^a-zA-Z0-9_\-\.]', '', app_target.split()[0] if app_target.split() else '')
+                if safe_app and len(safe_app) >= 2 and len(app_target.split()) <= 2:
+                    subprocess.Popen(f"start {safe_app}", shell=True)
+                    return {
+                        "executed": True,
+                        "domain": "launch",
+                        "action": f"launch_{safe_app}",
+                        "headline": f"Opening '{safe_app.title()}' now.",
+                        "details": f"Executed shell start '{safe_app}'."
+                    }
                 return {
                     "executed": False,
                     "domain": "launch",
-                    "message": f"Failed to open '{app_target}': {str(ex)}"
+                    "message": f"'{app_target}' is not a recognized application or URL."
                 }
+        except Exception as e:
+            return {
+                "executed": False,
+                "domain": "launch",
+                "message": f"Failed to open '{app_target}': {str(e)}"
+            }
 
 system_controller = SystemController()

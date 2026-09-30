@@ -410,6 +410,37 @@ async def video_feed():
 
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+@app.get("/api/physical/cameras")
+async def list_available_cameras():
+    from backend.physical.multi_camera import multi_camera_hub
+    return multi_camera_hub.get_cameras()
+
+class SelectCameraRequest(BaseModel):
+    camera_id: int
+
+@app.post("/api/physical/select_camera")
+async def select_camera_device(req: SelectCameraRequest):
+    from backend.physical.multi_camera import multi_camera_hub
+    multi_camera_hub.set_active_camera(req.camera_id)
+    return {"status": "success", "active_camera_id": req.camera_id}
+
+@app.post("/api/physical/build_project")
+async def build_project_from_workspace():
+    from backend.reasoning.project_builder import project_architect
+    latest = camera_manager.get_latest_analysis()
+    labels = [o.label for o in (latest.objects if latest else [])]
+    blueprint = project_architect.synthesize_project_from_components(labels)
+    # Broadcast to Studio Canvas via WebSocket
+    for ws in list(connected_websockets):
+        try:
+            await ws.send_json({
+                "type": "AUTO_DRAW_PROJECT",
+                "payload": blueprint.model_dump()
+            })
+        except Exception:
+            pass
+    return blueprint.model_dump()
+
 @app.get("/api/companion/thought")
 async def get_companion_thought():
     thought = companion_brain.evaluate_live_state()

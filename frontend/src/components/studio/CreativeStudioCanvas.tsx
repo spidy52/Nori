@@ -83,13 +83,14 @@ export type HandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'ro
 
 export interface CanvasElement {
   id: string;
-  type: 'rectangle' | 'diamond' | 'ellipse' | 'arrow' | 'line' | 'pen' | 'text' | 'sticky';
+  type: 'rectangle' | 'diamond' | 'ellipse' | 'arrow' | 'line' | 'pen' | 'text' | 'sticky' | 'image';
   x: number;
   y: number;
   width: number;
   height: number;
   rotation?: number; // In radians
   text?: string;
+  imageData?: string; // Captured component photo / data URL
   strokeColor: string;
   backgroundColor: string;
   strokeWidth: number;
@@ -159,6 +160,7 @@ export const NOTE_THEMES: Record<StickyCategory, { bg: string; border: string; t
     border: '#22c55e',
     text: '#14532d',
     name: 'Mint Emerald'
+    
   },
   Action: {
     bg: '#ffe4e6',
@@ -585,6 +587,7 @@ export const CreativeStudioCanvas: React.FC = () => {
   // Canvas Viewport & Engine State
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
   const [activeTool, setActiveTool] = useState<CanvasTool>('select');
   const [elements, setElements] = useState<CanvasElement[]>(activeProject.elements || []);
@@ -963,248 +966,191 @@ export const CreativeStudioCanvas: React.FC = () => {
       const ox = 240;
       const oy = 220;
 
-      // 1. HARDWARE / CIRCUIT / CAMERA PERCEPTION DIAGNOSTIC DIAGRAM
+      // 1. HARDWARE / WORKBENCH CIRCUIT & COMPONENT DIAGRAM
       if (
-        extraContext ||
+        extraContext?.blueprint ||
+        extraContext?.componentCrops ||
+        extraContext?.wiringAnalysis ||
         lower.includes('hardware') ||
         lower.includes('circuit') ||
         lower.includes('arduino') ||
-        lower.includes('esp32') ||
         lower.includes('sensor') ||
-        lower.includes('tmp36') ||
-        lower.includes('repair') ||
-        lower.includes('fix') ||
         lower.includes('wire') ||
-        lower.includes('desk')
+        lower.includes('component') ||
+        lower.includes('workbench')
       ) {
-        const diagNote =
-          extraContext?.wiringAnalysis ||
-          '1. Connect Pin 1 (5V VCC) to Arduino 5V Rail\n2. Connect Pin 2 (Signal Vout) to Analog Pin A0\n3. Connect Pin 3 (GND) to Common Ground\n4. Verified 0-ohm continuity with Multimeter';
+        const bp = extraContext?.blueprint;
+        const crops = extraContext?.componentCrops || {};
+        const title = bp?.title || 'Physical Hardware Architecture';
+        const componentsUsed = bp?.detected_components_used || ['Arduino Uno', 'HC-SR04 Sensor', 'Jumper Wires'];
 
-        const plan: {
-          name: string;
-          explanation: string;
-          sequence: Array<{ status: string; element: CanvasElement }>;
-        } = {
-          name: 'Hardware Circuit Diagnostic & Pinout Fix',
-          explanation:
-            'Here is the complete hardware wiring fix. I have mapped the microcontroller pinouts, sensor terminals, and color-coded power and signal rails with step-by-step instructions.',
-          sequence: [
-            {
-              status: 'Placing Microcontroller Controller (Arduino Uno / ESP32)',
-              element: {
-                id: `hw_mcu_${Date.now()}`,
-                type: 'rectangle',
-                x: ox,
-                y: oy,
-                width: 290,
-                height: 140,
-                rotation: 0,
-                text: 'Arduino Uno Rev3 / MCU\n• 5V Power Rail (Red)\n• GND Common (Black)\n• Analog In A0 (Yellow)',
-                strokeColor: '#38bdf8',
-                backgroundColor: 'rgba(56, 189, 248, 0.18)',
-                strokeWidth: 2,
-                strokeStyle: 'solid',
-                fillStyle: 'solid',
-                roundness: 6,
-                fontSize: 14,
-                opacity: 100
-              }
-            },
-            {
-              status: 'Placing Sensor / Breadboard Module',
-              element: {
-                id: `hw_sensor_${Date.now()}`,
-                type: 'rectangle',
-                x: ox + 420,
-                y: oy,
-                width: 270,
-                height: 140,
-                rotation: 0,
-                text: 'Analog Sensor / Rig\n• Pin 1: +5V VCC\n• Pin 2: Vout Signal\n• Pin 3: GND Ground',
-                strokeColor: '#fb923c',
-                backgroundColor: 'rgba(251, 146, 60, 0.18)',
-                strokeWidth: 2,
-                strokeStyle: 'solid',
-                fillStyle: 'solid',
-                roundness: 6,
-                fontSize: 14,
-                opacity: 100
-              }
-            },
-            {
-              status: 'Drawing +5V Power Rail (Red Wire)',
-              element: {
-                id: `hw_wire_pwr_${Date.now()}`,
-                type: 'arrow',
-                x: ox + 290,
-                y: oy + 35,
-                width: 130,
-                height: 0,
-                rotation: 0,
-                text: '+5V Power Rail',
-                strokeColor: '#f43f5e',
-                backgroundColor: 'transparent',
-                strokeWidth: 2,
-                strokeStyle: 'solid',
-                fillStyle: 'solid',
-                roundness: 0,
-                fontSize: 12,
-                points: [{ x: 0, y: 0 }, { x: 130, y: 0 }],
-                opacity: 100
-              }
-            },
-            {
-              status: 'Drawing Ground Return Rail (Black/Cyan Wire)',
-              element: {
-                id: `hw_wire_gnd_${Date.now()}`,
-                type: 'arrow',
-                x: ox + 290,
-                y: oy + 70,
-                width: 130,
-                height: 0,
-                rotation: 0,
-                text: 'GND Return',
-                strokeColor: '#22d3ee',
-                backgroundColor: 'transparent',
-                strokeWidth: 2,
-                strokeStyle: 'solid',
-                fillStyle: 'solid',
-                roundness: 0,
-                fontSize: 12,
-                points: [{ x: 0, y: 0 }, { x: 130, y: 0 }],
-                opacity: 100
-              }
-            },
-            {
-              status: 'Drawing Analog Data Signal Wire (Yellow Wire)',
-              element: {
-                id: `hw_wire_sig_${Date.now()}`,
-                type: 'arrow',
-                x: ox + 420,
-                y: oy + 105,
-                width: -130,
-                height: 0,
-                rotation: 0,
-                text: 'Analog A0',
-                strokeColor: '#fbbf24',
-                backgroundColor: 'transparent',
-                strokeWidth: 2,
-                strokeStyle: 'solid',
-                fillStyle: 'solid',
-                roundness: 0,
-                fontSize: 12,
-                points: [{ x: 0, y: 0 }, { x: -130, y: 0 }],
-                opacity: 100
-              }
-            },
-            {
-              status: 'Placing Step-by-Step Diagnostic & Fix Guide Sticky Note',
-              element: {
-                id: `hw_fix_note_${Date.now()}`,
-                type: 'sticky',
-                x: ox + 740,
-                y: oy - 30,
-                width: 360,
-                height: 220,
-                rotation: 0,
-                text: `🔧 Hardware Diagnostic & Fix Guide:\n• Setup: ${promptText.slice(0, 32)}\n• Step 1: Disconnect DC power before modifying circuit\n• Step 2: Ensure shared common ground on breadboard\n• Step 3: ${diagNote.slice(0, 90)}\n• Rule: Never apply >5V to analog input A0`,
-                strokeColor: '#eab308',
-                backgroundColor: '#fef08a',
-                strokeWidth: 1.5,
-                strokeStyle: 'solid',
-                fillStyle: 'solid',
-                roundness: 6,
-                fontSize: 13,
-                opacity: 100,
-                category: 'Decision' as StickyCategory
-              }
-            }
-          ]
-        };
+        // Find available cropped component images
+        let arduinoCropUrl: string | undefined;
+        let sensorCropUrl: string | undefined;
+        let breadboardCropUrl: string | undefined;
 
-        setAiPrompt('');
-        await executeAutonomousAutoDraw(plan, newProjId);
-        return;
-      }
+        Object.keys(crops).forEach((k) => {
+          const lk = k.toLowerCase();
+          if (lk.includes('arduino') || lk.includes('microcontroller') || lk.includes('uno')) {
+            arduinoCropUrl = crops[k].dataUrl;
+          } else if (lk.includes('ultrasonic') || lk.includes('sensor') || lk.includes('hc-sr04')) {
+            sensorCropUrl = crops[k].dataUrl;
+          } else if (lk.includes('breadboard')) {
+            breadboardCropUrl = crops[k].dataUrl;
+          }
+        });
 
-      // 2. SOFTWARE / FULL-STACK SYSTEM ARCHITECTURE DIAGRAM (HLD / LLD)
-      const res = await askNori(`Synthesize modular architecture blueprint for: ${promptText}`);
-      const summaryText = res.summary || res.headline || 'Production High-Level Design Architecture';
-      const tasks = res.suggested_actions || res.breakdowns?.[0]?.items || [
-        'Deploy FastAPI Async WebSockets',
-        'Mount Context Graph SQLite Store',
-        'Configure Local Ollama & NPU Inference'
-      ];
-
-      const plan: {
-        name: string;
-        explanation: string;
-        sequence: Array<{ status: string; element: CanvasElement }>;
-      } = {
-        name: promptText,
-        explanation: `Here is the comprehensive High-Level Design (HLD) blueprint for ${promptText}. I have mapped the client ingress, core processing engine, local AI inference fabric, and persistent data layers.`,
-        sequence: [
-          // Tier 1: Client Ingress
+        const sequence: Array<{ status: string; element: CanvasElement }> = [
+          // Boundary Zone 1: Physical Workbench Components
           {
-            status: 'Drafting Client Ingress & Desktop Shell',
+            status: 'Setting Up Physical Workbench Container',
             element: {
-              id: `ai_node1_${Date.now()}`,
+              id: `zone_workbench_${Date.now()}`,
               type: 'rectangle',
-              x: ox,
-              y: oy,
-              width: 250,
-              height: 120,
+              x: ox - 20,
+              y: oy - 30,
+              width: 480,
+              height: 380,
               rotation: 0,
-              text: 'Client Ingress Tier\n• Vite React Studio (Canvas)\n• Electron Floating Pet Orb\n• Real-Time User Controls',
+              text: 'Physical Workbench (Photographed Components)',
+              strokeColor: '#2e3446',
+              backgroundColor: '#141720',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 12,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Boundary Zone 2: Embedded Logic & Processing Hub
+          {
+            status: 'Setting Up Embedded Processing Hub Container',
+            element: {
+              id: `zone_firmware_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 500,
+              y: oy - 30,
+              width: 440,
+              height: 380,
+              rotation: 0,
+              text: 'Embedded Runtime & Processing Hub',
+              strokeColor: '#2e3446',
+              backgroundColor: '#181a24',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 12,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Photographed or Schematic Arduino MCU Element
+          {
+            status: 'Placing Arduino Microcontroller (Photographed)',
+            element: {
+              id: `hw_mcu_${Date.now()}`,
+              type: (arduinoCropUrl ? 'image' : 'rectangle') as CanvasElement['type'],
+              imageData: arduinoCropUrl,
+              x: ox + 15,
+              y: oy + 35,
+              width: 200,
+              height: 140,
+              rotation: 0,
+              text: 'Arduino Uno R3 (ATmega328P)\n• 5V Power, GND\n• Pins D8, D9, D13\n• 16 MHz Clock',
               strokeColor: '#38bdf8',
-              backgroundColor: 'rgba(56, 189, 248, 0.16)',
+              backgroundColor: '#1a1d28',
               strokeWidth: 2,
               strokeStyle: 'solid',
               fillStyle: 'solid',
               roundness: 8,
-              fontSize: 13,
+              fontSize: 12,
               opacity: 100
             }
           },
-          // Connector 1 -> 2
+          // Photographed or Schematic Sensor Element
           {
-            status: 'Connecting Client Tier to API Gateway',
+            status: 'Placing Ultrasonic Sensor (Photographed)',
             element: {
-              id: `ai_arr1_${Date.now()}`,
-              type: 'arrow',
-              x: ox + 250,
-              y: oy + 60,
-              width: 90,
-              height: 0,
+              id: `hw_sensor_${Date.now()}`,
+              type: (sensorCropUrl ? 'image' : 'rectangle') as CanvasElement['type'],
+              imageData: sensorCropUrl,
+              x: ox + 245,
+              y: oy + 35,
+              width: 195,
+              height: 140,
               rotation: 0,
-              text: 'Async WS / REST',
-              strokeColor: '#38bdf8',
-              backgroundColor: 'transparent',
+              text: 'HC-SR04 Sensor (Ultrasonic)\n• VCC (5V Power)\n• GND (Ground)\n• Trig (Pulse) & Echo',
+              strokeColor: '#10b981',
+              backgroundColor: '#1a1d28',
               strokeWidth: 2,
               strokeStyle: 'solid',
               fillStyle: 'solid',
-              roundness: 0,
-              fontSize: 11,
-              points: [{ x: 0, y: 0 }, { x: 90, y: 0 }],
+              roundness: 8,
+              fontSize: 12,
               opacity: 100
             }
           },
-          // Tier 2: API Gateway & Event Bus
+          // Breadboard / Power Tie Bus Card
           {
-            status: 'Drafting API Gateway & Normalized Event Bus',
+            status: 'Placing Solderless Breadboard & Distribution',
             element: {
-              id: `ai_node2_${Date.now()}`,
-              type: 'diamond',
-              x: ox + 340,
-              y: oy - 15,
-              width: 230,
-              height: 150,
+              id: `hw_proto_${Date.now()}`,
+              type: (breadboardCropUrl ? 'image' : 'rectangle') as CanvasElement['type'],
+              imageData: breadboardCropUrl,
+              x: ox + 15,
+              y: oy + 205,
+              width: 425,
+              height: 120,
               rotation: 0,
-              text: 'FastAPI Backend\nGateway & Event Bus\n• /api/reasoning/ask\n• /ws/events stream',
-              strokeColor: '#818cf8',
-              backgroundColor: 'rgba(129, 140, 248, 0.16)',
-              strokeWidth: 2,
+              text: 'Solderless Prototyping Breadboard\n• +5V Power Distribution Rail (Red)\n• Common Ground Rail (Black)\n• 220Ω Resistor + Status Indicator LED',
+              strokeColor: '#475569',
+              backgroundColor: '#161922',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 8,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Logic / Firmware Processing Card inside Zone 2
+          {
+            status: 'Placing Embedded Firmware Execution Card',
+            element: {
+              id: `hw_logic_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 530,
+              y: oy + 45,
+              width: 380,
+              height: 95,
+              rotation: 0,
+              text: 'Embedded Signal Processing Pipeline\n1. 10µs High Sound Pulse (Pin 9 Trig)\n2. Precision pulseIn Echo Timing (Pin 8)\n3. Distance (cm) = duration × 0.034 / 2',
+              strokeColor: '#373b49',
+              backgroundColor: '#1e2029',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 8,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Royal Blue Hardware Target Chips
+          {
+            status: 'Mounting ATmega328P Core Execution Chip',
+            element: {
+              id: `chip_mcu_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 530,
+              y: oy + 165,
+              width: 115,
+              height: 44,
+              rotation: 0,
+              text: 'ATmega328P',
+              strokeColor: '#3b82f6',
+              backgroundColor: '#2563eb',
+              strokeWidth: 1,
               strokeStyle: 'solid',
               fillStyle: 'solid',
               roundness: 4,
@@ -1212,21 +1158,109 @@ export const CreativeStudioCanvas: React.FC = () => {
               opacity: 100
             }
           },
-          // Connector 2 -> 3
           {
-            status: 'Connecting API Gateway to Core Engines',
+            status: 'Mounting Hardware Timer PWM Execution Chip',
             element: {
-              id: `ai_arr2_${Date.now()}`,
+              id: `chip_timer_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 662,
+              y: oy + 165,
+              width: 115,
+              height: 44,
+              rotation: 0,
+              text: 'Timer 1 PWM',
+              strokeColor: '#3b82f6',
+              backgroundColor: '#2563eb',
+              strokeWidth: 1,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 4,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          {
+            status: 'Mounting UART Telemetry Chip',
+            element: {
+              id: `chip_uart_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 795,
+              y: oy + 165,
+              width: 115,
+              height: 44,
+              rotation: 0,
+              text: '115200 UART',
+              strokeColor: '#3b82f6',
+              backgroundColor: '#2563eb',
+              strokeWidth: 1,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 4,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Wire 1: Arduino 5V -> Sensor VCC (Red)
+          {
+            status: 'Drawing 5V VCC Power Connection (Red Wire)',
+            element: {
+              id: `wire_pwr_${Date.now()}`,
               type: 'arrow',
-              x: ox + 570,
-              y: oy + 60,
+              x: ox + 215,
+              y: oy + 65,
+              width: 30,
+              height: 0,
+              rotation: 0,
+              text: '5V VCC',
+              strokeColor: '#ef4444',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 10,
+              points: [{ x: 0, y: 0 }, { x: 30, y: 0 }],
+              opacity: 100
+            }
+          },
+          // Wire 2: Arduino GND -> Sensor GND (Black)
+          {
+            status: 'Drawing GND Ground Common Connection (Black Wire)',
+            element: {
+              id: `wire_gnd_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 215,
+              y: oy + 105,
+              width: 30,
+              height: 0,
+              rotation: 0,
+              text: 'GND',
+              strokeColor: '#64748b',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 10,
+              points: [{ x: 0, y: 0 }, { x: 30, y: 0 }],
+              opacity: 100
+            }
+          },
+          // Wire 3: Forward Signal to Firmware Hub (Electric Blue)
+          {
+            status: 'Routing Physical Signals to Embedded Firmware Hub',
+            element: {
+              id: `wire_signal_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 440,
+              y: oy + 92,
               width: 90,
               height: 0,
               rotation: 0,
-              text: 'Event Context',
-              strokeColor: '#818cf8',
+              text: 'Trig & Echo Bus',
+              strokeColor: '#3b82f6',
               backgroundColor: 'transparent',
-              strokeWidth: 2,
+              strokeWidth: 2.5,
               strokeStyle: 'solid',
               fillStyle: 'solid',
               roundness: 0,
@@ -1235,116 +1269,386 @@ export const CreativeStudioCanvas: React.FC = () => {
               opacity: 100
             }
           },
-          // Tier 3: Core Intelligence & Context Graph
+          // Orthogonal Feedback Loop: Telemetry Stream along bottom back to Arduino
           {
-            status: 'Drafting Core Intelligence & Work Context Graph',
+            status: 'Routing Real-Time Telemetry Feedback Loop',
             element: {
-              id: `ai_node3_${Date.now()}`,
-              type: 'rectangle',
-              x: ox + 660,
-              y: oy,
-              width: 260,
-              height: 120,
-              rotation: 0,
-              text: 'Core Context Engine\n• Work Context Graph\n• Live System Observer\n• Physical Vision Daemon',
-              strokeColor: '#c084fc',
-              backgroundColor: 'rgba(192, 132, 252, 0.16)',
-              strokeWidth: 2,
-              strokeStyle: 'solid',
-              fillStyle: 'solid',
-              roundness: 8,
-              fontSize: 13,
-              opacity: 100
-            }
-          },
-          // Connector 3 -> 4 (Downward to AI & Database)
-          {
-            status: 'Connecting Engine to Multi-Model Inference',
-            element: {
-              id: `ai_arr3_${Date.now()}`,
+              id: `wire_telemetry_${Date.now()}`,
               type: 'arrow',
-              x: ox + 790,
-              y: oy + 120,
-              width: 0,
-              height: 80,
+              x: ox + 850,
+              y: oy + 209,
+              width: -750,
+              height: 0,
               rotation: 0,
-              text: 'Local AI Offload',
-              strokeColor: '#c084fc',
+              text: 'Spatial Telemetry & Distance Feedback (16 Hz)',
+              strokeColor: '#2563eb',
               backgroundColor: 'transparent',
-              strokeWidth: 2,
+              strokeWidth: 2.5,
               strokeStyle: 'solid',
               fillStyle: 'solid',
               roundness: 0,
               fontSize: 11,
-              points: [{ x: 0, y: 0 }, { x: 0, y: 80 }],
+              points: [{ x: 0, y: 0 }, { x: 0, y: 110 }, { x: -750, y: 110 }, { x: -750, y: -45 }],
               opacity: 100
             }
-          },
-          // Tier 4: Multi-Model Inference Fabric
+          }
+        ];
+
+        const plan = {
+          name: title,
+          explanation: `Synthesized hardware circuit architecture diagram for ${title}. Placed actual component photo crops, verified pinouts, and routed electrical signals and feedback telemetry.`,
+          sequence
+        };
+
+        setAiPrompt('');
+        await executeAutonomousAutoDraw(plan, newProjId, []);
+        return;
+      }
+
+      // 2. DYNAMIC QUALCOMM-STYLE PIPELINE ARCHITECTURE (SNAPDRAGON NPU, LOCAL AI, AGENT, FULL-STACK)
+      let zoneLeftTitle = 'Off Device';
+      let zoneRightTitle = 'On Device';
+      let step1Title = '1. Design and train a machine learning model';
+      let step2Title = '2. Convert the model to DLC / QNN ONNX format';
+      let step3Title = '3. Add the Qualcomm Neural Processing SDK to your application';
+      let step4Title = '4. Load and run the model on Snapdragon';
+      let chips = ['CPU', 'GPU', 'Hexagon\nNPU'];
+      let feedback1Label = 'Design Hints';
+      let feedback2Label = 'Execution profiling';
+
+      // Dynamic Adaptation based on Prompt Semantics (NO hardcoding)
+      if (lower.includes('agent') || lower.includes('computer-use') || lower.includes('desktop') || lower.includes('vision')) {
+        zoneLeftTitle = 'Host Workspace Ingress';
+        zoneRightTitle = 'Local NPU Agent Engine';
+        step1Title = '1. Capture desktop screen & voice speech telemetry';
+        step2Title = '2. Tokenize prompt & construct temporal context graph';
+        step3Title = '3. Bind native Windows User32 & PowerShell system APIs';
+        step4Title = '4. Execute reasoning & computer-use action loop';
+        chips = ['DirectML\nVision', 'Host\nCPU', 'Hexagon\nNPU'];
+        feedback1Label = 'Context Alignment';
+        feedback2Label = 'Desktop Observation';
+      } else if (lower.includes('web') || lower.includes('microservice') || lower.includes('api') || lower.includes('full-stack') || lower.includes('database')) {
+        zoneLeftTitle = 'Edge Ingress & Gateway';
+        zoneRightTitle = 'Distributed Compute Core';
+        step1Title = '1. Client ingress, React Studio & Electron Pet';
+        step2Title = '2. WebSocket gateway & normalized event dispatcher';
+        step3Title = '3. Configure background workers & SQLite persistent store';
+        step4Title = '4. Execute distributed compute & state synchronization';
+        chips = ['FastAPI\nCore', 'Worker\nMesh', 'SQLite\nStore'];
+        feedback1Label = 'State Validation';
+        feedback2Label = 'Telemetry Profiling';
+      }
+
+      const plan: { name: string; explanation?: string; sequence: Array<{ status: string; element: CanvasElement }> } = {
+        name: promptText,
+        explanation: `Synthesized high-performance Qualcomm-style architecture blueprint for ${promptText}. Mapped logical boundary zones, sequential stages, hardware execution chips, and orthogonal feedback loops.`,
+        sequence: [
+          // Left Zone Label / Container
           {
-            status: 'Drafting Multi-Model Inference Layer (Ollama & NPU)',
+            status: `Setting Up ${zoneLeftTitle} Boundary`,
             element: {
-              id: `ai_node4_${Date.now()}`,
-              type: 'rectangle',
-              x: ox + 660,
-              y: oy + 200,
-              width: 260,
-              height: 120,
+              id: `zone_label_left_${Date.now()}`,
+              type: 'text',
+              x: ox + 430,
+              y: oy - 25,
+              width: 140,
+              height: 30,
               rotation: 0,
-              text: 'Local AI Inference Layer\n• Ollama (qwen2.5:1.5b)\n• Qualcomm Snapdragon NPU\n• Zero-Cloud Offline Privacy',
-              strokeColor: '#34d399',
-              backgroundColor: 'rgba(52, 211, 153, 0.16)',
-              strokeWidth: 2,
+              text: zoneLeftTitle,
+              strokeColor: '#f1f5f9',
+              backgroundColor: 'transparent',
+              strokeWidth: 1,
               strokeStyle: 'solid',
               fillStyle: 'solid',
-              roundness: 8,
-              fontSize: 13,
+              roundness: 0,
+              fontSize: 16,
               opacity: 100
             }
           },
-          // Tier 5: Persistence & SQLite Store
+          // Right Zone Container: "On Device" (Elevated Dark Slate Container)
           {
-            status: 'Drafting Persistent Storage & Database Tier',
+            status: `Setting Up ${zoneRightTitle} Execution Container`,
             element: {
-              id: `ai_node5_${Date.now()}`,
+              id: `zone_right_${Date.now()}`,
               type: 'rectangle',
-              x: ox + 340,
-              y: oy + 200,
-              width: 230,
-              height: 120,
+              x: ox + 590,
+              y: oy - 45,
+              width: 360,
+              height: 380,
               rotation: 0,
-              text: 'Persistent Storage Tier\n• SQLite Context Graph\n• Temporal Events Store\n• Hardware Telemetry Log',
-              strokeColor: '#fbbf24',
-              backgroundColor: 'rgba(251, 191, 36, 0.16)',
-              strokeWidth: 2,
+              text: zoneRightTitle,
+              strokeColor: '#2e323e',
+              backgroundColor: '#181a20',
+              strokeWidth: 1.5,
               strokeStyle: 'solid',
               fillStyle: 'solid',
-              roundness: 8,
-              fontSize: 13,
+              roundness: 12,
+              fontSize: 16,
               opacity: 100
             }
           },
-          // Tier 6: Step-by-Step Architecture Blueprint Sticky Note
+          // Card 1
           {
-            status: 'Adding AI Blueprint Architecture Specification Sticky Note',
+            status: `Placing Stage 1 Card: ${step1Title.slice(0, 30)}`,
             element: {
-              id: `ai_note_${Date.now()}`,
-              type: 'sticky',
-              x: ox - 30,
-              y: oy + 170,
-              width: 320,
-              height: 190,
+              id: `step1_${Date.now()}`,
+              type: 'rectangle',
+              x: ox - 20,
+              y: oy + 35,
+              width: 250,
+              height: 80,
               rotation: 0,
-              text: `⚡ HLD Architecture Specification:\n• Target: ${promptText.slice(0, 36)}\n• Architecture: ${summaryText.slice(0, 75)}\n• Sprint Tasks:\n${tasks.slice(0, 3).map((t, i) => `  ${i + 1}. ${t.slice(0, 32)}`).join('\n')}`,
-              strokeColor: '#eab308',
-              backgroundColor: '#fef08a',
+              text: step1Title,
+              strokeColor: '#373b49',
+              backgroundColor: '#1e2029',
               strokeWidth: 1.5,
               strokeStyle: 'solid',
               fillStyle: 'solid',
               roundness: 8,
               fontSize: 12,
-              opacity: 100,
-              category: 'Decision' as StickyCategory
+              opacity: 100
+            }
+          },
+          // Card 2
+          {
+            status: `Placing Stage 2 Card: ${step2Title.slice(0, 30)}`,
+            element: {
+              id: `step2_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 300,
+              y: oy + 35,
+              width: 245,
+              height: 80,
+              rotation: 0,
+              text: step2Title,
+              strokeColor: '#373b49',
+              backgroundColor: '#1e2029',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 8,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Card 3
+          {
+            status: `Placing Stage 3 Card: ${step3Title.slice(0, 30)}`,
+            element: {
+              id: `step3_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 300,
+              y: oy + 175,
+              width: 245,
+              height: 80,
+              rotation: 0,
+              text: step3Title,
+              strokeColor: '#373b49',
+              backgroundColor: '#1e2029',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 8,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Card 4 (Inside On Device Container)
+          {
+            status: `Placing Stage 4 Execution Card: ${step4Title.slice(0, 30)}`,
+            element: {
+              id: `step4_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 630,
+              y: oy + 45,
+              width: 280,
+              height: 80,
+              rotation: 0,
+              text: step4Title,
+              strokeColor: '#373b49',
+              backgroundColor: '#1e2029',
+              strokeWidth: 1.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 8,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          // Blue Hardware Target Chips under Card 4
+          {
+            status: `Mounting ${chips[0]} Acceleration Chip`,
+            element: {
+              id: `chip_1_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 630,
+              y: oy + 155,
+              width: 82,
+              height: 44,
+              rotation: 0,
+              text: chips[0],
+              strokeColor: '#3b82f6',
+              backgroundColor: '#2563eb',
+              strokeWidth: 1,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 4,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          {
+            status: `Mounting ${chips[1]} Acceleration Chip`,
+            element: {
+              id: `chip_2_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 729,
+              y: oy + 155,
+              width: 82,
+              height: 44,
+              rotation: 0,
+              text: chips[1],
+              strokeColor: '#3b82f6',
+              backgroundColor: '#2563eb',
+              strokeWidth: 1,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 4,
+              fontSize: 12,
+              opacity: 100
+            }
+          },
+          {
+            status: `Mounting ${chips[2]} Acceleration Chip`,
+            element: {
+              id: `chip_3_${Date.now()}`,
+              type: 'rectangle',
+              x: ox + 828,
+              y: oy + 155,
+              width: 82,
+              height: 44,
+              rotation: 0,
+              text: chips[2],
+              strokeColor: '#3b82f6',
+              backgroundColor: '#2563eb',
+              strokeWidth: 1,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 4,
+              fontSize: 11,
+              opacity: 100
+            }
+          },
+          // Forward Arrow: 1 -> 2
+          {
+            status: 'Connecting Stage 1 to Stage 2',
+            element: {
+              id: `arrow_1_2_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 230,
+              y: oy + 75,
+              width: 70,
+              height: 0,
+              rotation: 0,
+              strokeColor: '#3b82f6',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 11,
+              points: [{ x: 0, y: 0 }, { x: 70, y: 0 }],
+              opacity: 100
+            }
+          },
+          // Forward Arrow: 2 -> 4 (Entering On Device)
+          {
+            status: `Routing Forward Flow into ${zoneRightTitle}`,
+            element: {
+              id: `arrow_2_4_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 545,
+              y: oy + 75,
+              width: 85,
+              height: 10,
+              rotation: 0,
+              strokeColor: '#3b82f6',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 11,
+              points: [{ x: 0, y: 0 }, { x: 85, y: 10 }],
+              opacity: 100
+            }
+          },
+          // Forward Arrow: 3 -> 4 (Entering On Device)
+          {
+            status: `Routing SDK Flow into ${zoneRightTitle}`,
+            element: {
+              id: `arrow_3_4_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 545,
+              y: oy + 215,
+              width: 85,
+              height: -105,
+              rotation: 0,
+              strokeColor: '#3b82f6',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 11,
+              points: [{ x: 0, y: 0 }, { x: 85, y: -105 }],
+              opacity: 100
+            }
+          },
+          // Orthogonal Feedback Loop 1: From 2 back to 1 (Design Hints)
+          {
+            status: `Routing Orthogonal Feedback: ${feedback1Label}`,
+            element: {
+              id: `feedback_loop_1_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 422,
+              y: oy + 115,
+              width: -320,
+              height: 0,
+              rotation: 0,
+              text: feedback1Label,
+              strokeColor: '#3b82f6',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 11,
+              points: [{ x: 0, y: 0 }, { x: 0, y: 35 }, { x: -320, y: 35 }, { x: -320, y: 0 }],
+              opacity: 100
+            }
+          },
+          // Orthogonal Feedback Loop 2: From Chips along bottom back to 1 (Execution profiling)
+          {
+            status: `Routing Orthogonal Feedback: ${feedback2Label}`,
+            element: {
+              id: `feedback_loop_2_${Date.now()}`,
+              type: 'arrow',
+              x: ox + 770,
+              y: oy + 199,
+              width: -750,
+              height: 0,
+              rotation: 0,
+              text: feedback2Label,
+              strokeColor: '#3b82f6',
+              backgroundColor: 'transparent',
+              strokeWidth: 2.5,
+              strokeStyle: 'solid',
+              fillStyle: 'solid',
+              roundness: 0,
+              fontSize: 11,
+              points: [{ x: 0, y: 0 }, { x: 0, y: 110 }, { x: -750, y: 110 }, { x: -750, y: -84 }],
+              opacity: 100
             }
           }
         ]
@@ -2584,6 +2888,47 @@ export const CreativeStudioCanvas: React.FC = () => {
           }
 
           ctx.restore();
+          break;
+        }
+
+        case 'image': {
+          if (el.imageData) {
+            let img = imageCacheRef.current.get(el.imageData);
+            if (!img) {
+              img = new Image();
+              img.src = el.imageData;
+              imageCacheRef.current.set(el.imageData, img);
+              img.onload = () => renderCanvas();
+            }
+            if (img.complete && img.naturalWidth > 0) {
+              const r = el.roundness ?? 8;
+              ctx.save();
+              ctx.beginPath();
+              ctx.roundRect(el.x, el.y, el.width, el.height, r);
+              ctx.clip();
+              ctx.drawImage(img, el.x, el.y, el.width, el.height);
+              ctx.restore();
+
+              // High-tech sleek border
+              ctx.beginPath();
+              ctx.roundRect(el.x, el.y, el.width, el.height, r);
+              ctx.strokeStyle = el.strokeColor || '#38bdf8';
+              ctx.lineWidth = el.strokeWidth || 2;
+              ctx.stroke();
+
+              // Caption label badge at bottom of image
+              if (el.text && !isCurrentlyEditing) {
+                const badgeH = 26;
+                ctx.fillStyle = 'rgba(10, 14, 22, 0.90)';
+                ctx.fillRect(el.x, el.y + el.height - badgeH, el.width, badgeH);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = `600 11px 'JetBrains Mono', monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(el.text, el.x + el.width / 2, el.y + el.height - badgeH / 2);
+              }
+            }
+          }
           break;
         }
       }

@@ -75,23 +75,33 @@ def detect_snapdragon_npu() -> NpuCapability:
     has_qnn = "QNNExecutionProvider" in supported_providers
     has_dml = "DmlExecutionProvider" in supported_providers
     
-    if is_snapdragon or has_qnn:
+    # Strict NPU Verification: Requires Snapdragon platform AND QNN Execution Provider
+    if is_snapdragon and has_qnn:
         return NpuCapability(
             is_available=True,
-            runtime_name="Qualcomm QNN / AI Hub Runtime" if has_qnn else "DirectML Hardware NPU",
-            device_name=proc_name if proc_name else "Qualcomm Hexagon NPU",
+            runtime_name="Qualcomm QNN Runtime (QnnHtp.dll)",
+            device_name="Qualcomm Hexagon NPU (HTP)",
             supported_providers=supported_providers,
             quantization_formats=["INT8", "INT4", "FP16"],
-            status_reason="Active Snapdragon NPU hardware acceleration enabled."
+            status_reason="Snapdragon Hexagon NPU active via QNN Execution Provider."
+        )
+    elif is_snapdragon:
+        return NpuCapability(
+            is_available=False,
+            runtime_name="Snapdragon CPU Fallback",
+            device_name=proc_name if proc_name else "Snapdragon Oryon CPU",
+            supported_providers=supported_providers,
+            quantization_formats=["FP32", "INT8 (CPU-quantized)"],
+            status_reason="Snapdragon ARM64 host detected, but QNN Execution Provider (QnnHtp.dll) driver is not installed in ONNX Runtime. Operating on CPU fallback."
         )
     else:
         return NpuCapability(
             is_available=False,
-            runtime_name="CPU Software Execution Provider",
-            device_name=proc_name if proc_name else "Standard Host CPU",
+            runtime_name="CPU Development Fallback",
+            device_name=proc_name if proc_name else "Intel/AMD Host CPU",
             supported_providers=supported_providers,
-            quantization_formats=["FP32", "INT8 (CPU-quantized)"],
-            status_reason="Snapdragon NPU hardware not detected. All inferences gracefully routed through optimized CPU/Ollama fallback."
+            quantization_formats=["FP32", "INT8 (CPU)"],
+            status_reason="Development host (Intel/AMD x86_64). Qualcomm Hexagon NPU not present. All inferences routed through CPU Fallback."
         )
 
 def get_system_telemetry(project_focus: str = "Sensor Monitoring") -> DeviceStatus:

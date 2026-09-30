@@ -216,9 +216,73 @@ class NoriProactiveVoiceCompanion:
 
         action_lower = action_text.lower().strip()
 
+        # 3.1 Workspace Project Builder & Canvas Auto-Draw ("using all components on my workspace lets build a project", "build a project", "what can i build")
+        project_keywords = ["build a project", "build project", "make a project", "using all components", "all components on my workspace", "what can i build", "project ideas", "circuit architecture"]
+        if any(w in lower for w in project_keywords):
+            from backend.physical.vision_engine import camera_manager
+            from backend.reasoning.project_builder import project_architect
+            from backend.desktop_service import launch_any_app
+
+            latest = camera_manager.get_latest_analysis()
+            labels = [o.label for o in (latest.objects if latest else [])]
+            blueprint = project_architect.synthesize_project_from_components(labels)
+
+            launch_any_app("nori")
+            notify_backend_event("AUTO_DRAW", {"prompt": f"Hardware Architecture for {blueprint.title}"})
+            notify_backend_event("AUTO_DRAW_PROJECT", blueprint.model_dump())
+
+            detected_names = ", ".join(blueprint.detected_components_used[:3])
+            msg = f"I've analyzed the components on your desk: {detected_names}. I've designed a {blueprint.title} project for you and drawn the complete wiring schematic and C++ code on your Studio Canvas."
+            speak(msg)
+            return msg
+
+        # 3.2 Robust Math & Calculation Commands ("calculate 9 plus 66", "what is 9 plus 66", "calculate my drain plus 66")
+        has_math_op = any(w in lower for w in [" plus ", " minus ", " times ", " multiplied by ", " divided by ", " + ", " - ", " * ", " / "])
+        if has_math_op or any(lower.startswith(k) for k in ["calculate ", "what is ", "what's ", "how much is "]):
+            # Fix phonetic speech misrecognitions (e.g. "drain" -> 9, "nine" -> 9)
+            norm_math = (
+                lower.replace("drain", "9")
+                .replace("nine", "9")
+                .replace("eight", "8")
+                .replace("seven", "7")
+                .replace("six", "6")
+                .replace("five", "5")
+                .replace("four", "4")
+                .replace("three", "3")
+                .replace("two", "2")
+                .replace("one", "1")
+                .replace("zero", "0")
+                .replace("caliculate", "calculate")
+                .replace("can you open calculate on calculate", "calculate")
+                .replace("can you calculate", "calculate")
+                .replace("could you calculate", "calculate")
+                .replace("open calculate", "calculate")
+                .replace("calculate on", "calculate")
+            )
+
+            # Extract numbers and operator
+            nums = re.findall(r'\d+', norm_math)
+            if len(nums) >= 2:
+                n1, n2 = int(nums[0]), int(nums[1])
+                op_word = "plus"
+                res = n1 + n2
+                if "minus" in norm_math or "-" in norm_math:
+                    op_word = "minus"
+                    res = n1 - n2
+                elif "times" in norm_math or "multiplied" in norm_math or "*" in norm_math:
+                    op_word = "times"
+                    res = n1 * n2
+                elif "divided" in norm_math or "/" in norm_math:
+                    op_word = "divided by"
+                    res = round(n1 / max(1, n2), 2)
+
+                msg = f"{n1} {op_word} {n2} equals {res}."
+                speak(msg)
+                notify_backend_event("MATH_RESULT", {"expression": f"{n1} {op_word} {n2}", "result": res})
+                return msg
+
         # Math / Calculation Commands ("calculate 50 plus 25", "calculate 100 / 4", "what is 25 * 4")
         if any(action_lower.startswith(k) for k in ["calculate ", "what is ", "what's ", "how much is "]):
-            import re
             calc_query = action_lower
             for prefix in ["calculate ", "what is ", "what's ", "how much is "]:
                 if calc_query.startswith(prefix):
@@ -251,16 +315,25 @@ class NoriProactiveVoiceCompanion:
                     return msg
                 except Exception:
                     pass
+                    return msg
+                except Exception:
+                    pass
 
         # Direct App / Tool Opener ("open calculator", "launch notepad", "open vs code", "open brave", "open terminal", etc.)
         if any(w in action_lower for w in ["open", "launch", "start", "run", "bring up", "show nori", "show workspace", "show canvas"]):
-            from backend.desktop_service import launch_any_app
-            launched = launch_any_app(action_text)
-            if launched:
-                app_label = action_lower.replace('open', '').replace('launch', '').replace('start', '').replace('my', '').strip()
-                msg = f"Opening {app_label or 'application'}."
-                speak(msg)
-                return msg
+            # Strictly ensure this is NOT a math question or complex question
+            if not any(m in action_lower for m in ["plus", "minus", "times", "multiplied", "divided", "over", "+", "-", "*", "/", "sum of", "drain", "equals", "?"]):
+                from backend.desktop_service import launch_any_app
+                launched = launch_any_app(action_text)
+                if launched:
+                    app_label = action_lower
+                    for prefix in ['open', 'launch', 'start', 'run', 'bring up', 'show nori', 'show workspace', 'show canvas', 'show', 'my', 'the']:
+                        if app_label.startswith(prefix):
+                            app_label = app_label[len(prefix):].strip()
+                    app_clean = re.sub(r'[^a-zA-Z0-9\s]', '', app_label).strip().title()
+                    msg = f"Opening {app_clean or 'application'}."
+                    speak(msg)
+                    return msg
 
         # 4. Pure Greeting (Only when the entire utterance is just a greeting without further commands)
         wake_names = ["nori", "hey nori", "hi nori", "hello nori", "lori", "loriya", "noori", "nari", "nory", "lauri", "mori"]
@@ -439,16 +512,6 @@ class NoriProactiveVoiceCompanion:
                 return msg
             return "Could not minimize window."
 
-        # 11. Open Any App / Workspace / Folder ("open nori", "open vs code", "open brave", "open chrome", "open notepad", "open calc", "open app")
-        if any(w in lower for w in ["open", "launch", "start", "show nori", "show workspace", "show canvas"]):
-            from backend.desktop_service import launch_any_app
-            launched = launch_any_app(raw_text)
-            if launched:
-                app_label = raw_text.replace('hey nori', '').replace('nori', '').replace('please', '').strip()
-                msg = f"Opening {app_label}."
-                speak(msg)
-                return msg
-
         # 12. Full Sentence Intelligent Question / Query (Only if genuine command/question or addressed to Nori)
         notify_backend_event("STATE_CHANGED", {"state": "thinking"})
         answer = ask_nori_ai(raw_text)
@@ -602,7 +665,7 @@ class NoriProactiveVoiceCompanion:
                 IS_TTS_SPEAKING = False
 
             # Mute microphone processing while Nori itself is speaking out loud (prevents hearing its own voice)
-            if IS_TTS_SPEAKING or (time.time() - TTS_FINISHED_TIME < 1.3):
+            if IS_TTS_SPEAKING or (time.time() - TTS_FINISHED_TIME < 2.2):
                 time.sleep(0.3)
                 continue
 
@@ -611,8 +674,8 @@ class NoriProactiveVoiceCompanion:
                     # Capture full sentence with 10s max phrase time limit
                     audio = self.recognizer.listen(source, timeout=3.0, phrase_time_limit=10.0)
 
-                # Discard audio if TTS was speaking during capture
-                if IS_TTS_SPEAKING or (time.time() - TTS_FINISHED_TIME < 1.3):
+                # Discard audio if TTS was speaking during capture or immediately finished
+                if IS_TTS_SPEAKING or (time.time() - TTS_FINISHED_TIME < 2.2):
                     continue
 
                 try:
@@ -632,27 +695,40 @@ class NoriProactiveVoiceCompanion:
 
                     if sentence:
                         clean_s = sentence.lower().strip()
-                        
+                        norm_s = re.sub(r'[^a-z0-9 ]', '', clean_s)
+                        norm_s = re.sub(r'\s+', ' ', norm_s).strip()
+                        words_s = set(norm_s.split())
+
                         # Acoustic Echo Filter: Strip or discard self-spoken phrases
                         is_pure_echo = False
-                        for phrase in list(RECENT_SPOKEN_PHRASES):
-                            if phrase and phrase in clean_s:
-                                # Strip out the echoed prefix and keep the user's real trailing speech
-                                idx = clean_s.find(phrase)
-                                trailing = sentence[:idx] + " " + sentence[idx + len(phrase):]
-                                trailing = trailing.strip()
-                                if len(trailing) > 3:
-                                    sentence = trailing
-                                    clean_s = sentence.lower().strip()
-                                else:
+
+                        # Ignore phrases that echo known system responses
+                        if any(norm_s.startswith(k) for k in [
+                            "ive processed your query",
+                            "im analyzing your active context",
+                            "opening caliculate",
+                            "i am watching your workspace"
+                        ]):
+                            is_pure_echo = True
+
+                        if not is_pure_echo:
+                            for phrase in list(RECENT_SPOKEN_PHRASES):
+                                norm_p = re.sub(r'[^a-z0-9 ]', '', phrase.lower())
+                                norm_p = re.sub(r'\s+', ' ', norm_p).strip()
+                                words_p = set(norm_p.split())
+
+                                if norm_p and (norm_p in norm_s or norm_s in norm_p):
                                     is_pure_echo = True
                                     break
-                            elif len(clean_s.split()) >= 3 and clean_s in phrase:
-                                is_pure_echo = True
-                                break
+
+                                if len(words_s) >= 2 and len(words_p) >= 2:
+                                    overlap = len(words_s.intersection(words_p)) / float(len(words_s))
+                                    if overlap >= 0.35:
+                                        is_pure_echo = True
+                                        break
 
                         if is_pure_echo:
-                            logger.info(f"[Echo Filtered]: Ignored pure self-spoken phrase '{sentence}'")
+                            logger.info(f"[Echo Filtered]: Ignored self-spoken audio echo '{sentence}'")
                             continue
 
                         self.process_full_sentence(sentence)

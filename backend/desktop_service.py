@@ -152,8 +152,14 @@ def launch_any_app(app_query: str) -> bool:
         .strip()
     )
 
-    # 1. Calculator
-    if any(k in cleaned for k in ["calc", "calculator", "math"]):
+    # 0. Reject math expressions and conversational questions immediately
+    math_indicators = ["plus", "minus", "times", "multiplied", "divided by", "divide by", "over", "+", "-", "*", "/", "sum of", "drain plus", "equals", "?"]
+    if any(w in cleaned for w in math_indicators):
+        logger.info(f"Skipping app launch for math query: {cleaned}")
+        return False
+
+    # 1. Calculator (Only launch if explicitly requesting the calculator tool/app)
+    if cleaned in ["calc", "calculator", "caliculate", "calculate"] or cleaned.endswith("calculator") or cleaned.endswith("calc"):
         subprocess.Popen("start calc:", shell=True)
         time.sleep(0.3)
         activate_window("calc")
@@ -265,15 +271,19 @@ def launch_any_app(app_query: str) -> bool:
         subprocess.Popen(f'explorer.exe "{target_dir}"', shell=True)
         return True
 
-    # 11. Generic Windows Start fallback
-    try:
-        subprocess.Popen(f'powershell.exe -Command "Start-Process {cleaned}"', shell=True)
-        time.sleep(0.3)
-        activate_window(cleaned)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to launch app '{cleaned}': {e}")
-        return False
+    # 11. Generic App Launch (Strictly validated, 1-2 words only, no shell crashes)
+    words = cleaned.split()
+    if words and len(words) <= 2:
+        safe_app = re.sub(r'[^a-zA-Z0-9_\-\.]', '', words[0])
+        if safe_app and len(safe_app) >= 2 and safe_app.lower() not in ["what", "how", "why", "when", "can", "could", "would", "is", "are", "do", "does", "my", "your", "the"]:
+            try:
+                subprocess.Popen(f'start {safe_app}', shell=True)
+                time.sleep(0.3)
+                activate_window(safe_app)
+                return True
+            except Exception as e:
+                logger.debug(f"Generic start notice for '{safe_app}': {e}")
+    return False
 
 def close_active_window() -> bool:
     """Closes the current active foreground window."""
