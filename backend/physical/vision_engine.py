@@ -341,8 +341,35 @@ class PhysicalVisionEngine:
             except Exception:
                 raw_dets = []
 
-        # 2.1 Open-World Subject Perception (Ceiling Fans, Air Coolers, Room Appliances)
-        if self.clip_model is not None and self.clip_tokens is not None:
+        # 2.1 Open-World CLIP Refiner — ONLY fires when YOLO has no strong real detection.
+        # This prevents CLIP from "sticking" to old scene when camera moves to a laptop/desk.
+        # CLIP surrogate labels — objects COCO-YOLO commonly misclassifies appliances as:
+        _yolo_surrogate_labels = {'sink', 'toilet', 'sports ball', 'bench', 'frisbee', 'kite', 'umbrella'}
+        # Real YOLO classes that definitively name the scene — CLIP must NOT override these:
+        _yolo_real_labels = {
+            'laptop', 'keyboard', 'mouse', 'cell phone', 'tv', 'remote', 'monitor',
+            'book', 'cup', 'bowl', 'bottle', 'fork', 'knife', 'spoon',
+            'banana', 'apple', 'orange', 'pizza', 'sandwich', 'broccoli', 'carrot',
+            'person', 'chair', 'couch', 'bed', 'dining table',
+            'backpack', 'handbag', 'suitcase', 'tie', 'clock', 'vase', 'scissors',
+            'teddy bear', 'hair drier', 'toothbrush'
+        }
+
+        # Check: does YOLO already have at least one confident real detection?
+        yolo_has_real = any(d['label'].lower() in _yolo_real_labels and d['confidence'] >= 0.40
+                            for d in raw_dets)
+        # Check: are ALL YOLO detections surrogates/ambiguous?
+        yolo_only_surrogates = (
+            len(raw_dets) > 0 and
+            all(d['label'].lower() in _yolo_surrogate_labels for d in raw_dets)
+        )
+        # Check: YOLO found nothing at all (empty room / wide scene)
+        yolo_empty = len(raw_dets) == 0
+
+        # Only invoke CLIP if YOLO has no real scene understanding
+        clip_should_fire = (not yolo_has_real) and (yolo_only_surrogates or yolo_empty)
+
+        if self.clip_model is not None and self.clip_tokens is not None and clip_should_fire:
             try:
                 import torch
                 from PIL import Image
@@ -358,11 +385,11 @@ class PhysicalVisionEngine:
 
                 # High-confidence open-world room fixture/appliance recognition (> 55%)
                 if clip_conf >= 0.55 and any(k in clip_label.lower() for k in ['fan', 'cooler', 'conditioner', 'refrigerator']):
+                    # Remove any surrogate raw_det that triggered CLIP
                     matched_bbox = None
                     for d in list(raw_dets):
                         dbx, dby, dbw, dbh = d['bbox']
-                        # Match if a large box or surrogate box exists
-                        if dbw >= w * 0.35 or dbh >= h * 0.35 or d['label'].lower() in ['sink', 'toilet', 'bench', 'chair']:
+                        if d['label'].lower() in _yolo_surrogate_labels:
                             matched_bbox = [dbx, dby, dbw, dbh]
                             raw_dets.remove(d)
                             break
@@ -379,6 +406,7 @@ class PhysicalVisionEngine:
                     ))
             except Exception:
                 pass
+
 
         # 2.2 Process all remaining authentic neural detections (conf >= 0.35)
         for d in raw_dets:
