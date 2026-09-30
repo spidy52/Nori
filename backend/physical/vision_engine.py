@@ -212,7 +212,8 @@ class PhysicalVisionEngine:
             "arduino", "raspberry", "breadboard", "resistor", "jumper", "led",
             "soldering", "multimeter", "pcb", "sensor", "microcontroller",
             "usb cable", "power bank", "electronic", "wires"
-        ]):\n            return ActivityContext(
+        ]):
+            return ActivityContext(
                 activity_type="hardware_repair",
                 headline="Hardware Prototyping & Electronics Workbench",
                 details="Electronic components, boards, or tools detected on workbench. Ready to assist with wiring, code, and schematics.",
