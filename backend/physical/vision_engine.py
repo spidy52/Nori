@@ -472,23 +472,60 @@ class PhysicalVisionEngine:
         for d in raw_dets:
             c_name = d["label"].lower()
 
-            # --- SURROGATE SUPPRESSION ---
-            # If YOLO fired a known surrogate label (truck/car/dining table/book/tie...)
-            # on what is actually an electronic component or appliance, silently drop it.
-            # CLIP has already fired (or will) to replace it with the correct label.
+            # --- SURROGATE SUPPRESSION / FALLBACK ---
+            # Vehicle surrogates (truck/car/bus) fired on electronics → fallback label
+            # Furniture surrogates (dining table/book) fired on boards → fallback label
+            # Only suppress silently if CLIP already provided a replacement object.
+            clip_fired = any(o.details.get('model', '').startswith('CLIP') for o in objects)
+            bx, by, bw, bh = d["bbox"]
+
             if c_name in _yolo_surrogate_labels:
+                if clip_fired:
+                    # CLIP already identified the real object — drop the surrogate entirely
+                    continue
+                # CLIP not available / didn't fire — use fallback label so object isn't invisible
+                _vehicle_surrogates = {'truck', 'car', 'bus', 'motorcycle', 'bicycle', 'airplane', 'boat', 'train'}
+                _furniture_surrogates = {'dining table', 'book', 'remote', 'skateboard', 'tie'}
+                # Skip full-frame false positives regardless
+                if bw >= w * 0.88 and bh >= h * 0.88:
+                    continue
+                if c_name in _vehicle_surrogates:
+                    fallback_label = "Electronic Component / Circuit Board"
+                    fallback_cat = "microcontroller"
+                    fallback_dialogue = "Detected an electronic component or circuit board. Bring closer for detailed identification."
+                    fallback_interactions = ["Pinout Guide", "Build Project", "Draw Schematic", "Generate Code"]
+                elif c_name in _furniture_surrogates:
+                    fallback_label = "Electronic Board / Module"
+                    fallback_cat = "microcontroller"
+                    fallback_dialogue = "Detected a flat electronic board or module."
+                    fallback_interactions = ["Inspect Component", "Build Project", "Generate Code"]
+                else:
+                    fallback_label = "Unknown Component"
+                    fallback_cat = "object"
+                    fallback_dialogue = "Detected an unidentified component."
+                    fallback_interactions = ["Inspect Object", "Workspace Focus"]
+
+                objects.append(DetectedObject(
+                    label=fallback_label,
+                    confidence=round(d["confidence"] * 0.75, 2),  # Reduce confidence to signal uncertainty
+                    category=fallback_cat,
+                    bbox=[bx, by, bw, bh],
+                    details={"model": "YOLOv8-Fallback", "raw_coco": c_name},
+                    interactive_dialogue=fallback_dialogue,
+                    suggested_interactions=fallback_interactions
+                ))
                 continue
+
+
 
             if c_name == 'person':
                 has_human_presence = True
                 if face_boxes:
-                    continue
+                    continue  # Face already handled by YuNet
 
             # Ignore full-frame furniture false positives
-            bx, by, bw, bh = d["bbox"]
             if (bw >= w * 0.90 and bh >= h * 0.90) and c_name in ['bench', 'chair', 'couch', 'bed']:
                 continue
-
 
             label = c_name.title()
             l_lower = label.lower()

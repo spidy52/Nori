@@ -71,7 +71,8 @@ export const CameraGuidanceView: React.FC = () => {
   const isAnalyzingRef = useRef<boolean>(false);
   const animationFrameRef = useRef<number | null>(null);
   const trackedBoxesRef = useRef<Map<string, TrackedBox>>(new Map());
-  const rawDetectionsRef = useRef<{ objs: any[]; frameW: number; frameH: number }>({ objs: [], frameW: 640, frameH: 480 });
+  const rawDetectionsRef = useRef<{ objs: any[]; frameW: number; frameH: number; ts: number }>({ objs: [], frameW: 640, frameH: 480, ts: Date.now() });
+  const lastDetectionTimeRef = useRef<number>(Date.now());
 
   const [hasBrowserStream, setHasBrowserStream] = useState<boolean>(false);
   const [streamActive, setStreamActive] = useState<boolean>(true);
@@ -213,7 +214,10 @@ export const CameraGuidanceView: React.FC = () => {
         if (ctx) {
           ctx.clearRect(0, 0, currentCanvas.width, currentCanvas.height);
 
-          const { objs, frameW, frameH } = rawDetectionsRef.current;
+          const { objs: rawObjs, frameW, frameH } = rawDetectionsRef.current;
+          // Stale detection guard: if no fresh data in 700ms, treat as empty scene
+          const isStale = (Date.now() - lastDetectionTimeRef.current) > 700;
+          const objs = isStale ? [] : rawObjs;
           const vidW = video.videoWidth || frameW || 640;
           const vidH = video.videoHeight || frameH || 480;
           const videoRatio = vidW / vidH;
@@ -453,7 +457,9 @@ export const CameraGuidanceView: React.FC = () => {
     if (!data) return;
 
     const rawObjs = data.objects || [];
-    rawDetectionsRef.current = { objs: rawObjs, frameW, frameH };
+    lastDetectionTimeRef.current = Date.now();
+    rawDetectionsRef.current = { objs: rawObjs, frameW, frameH, ts: Date.now() };
+
 
     // Check focus state
     const focus = rawObjs.find((o: any) => o.category === 'user_focus');
